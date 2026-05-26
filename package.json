@@ -1,0 +1,13 @@
+{
+  "name": "a-share-watchlist",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "backend": "python run_backend.py --no-reload",
+    "build": "npm --prefix frontend run build",
+    "dev": "npm --prefix frontend run dev",
+    "preview": "npm --prefix frontend run preview",
+    "frontend:install": "npm --prefix frontend install",
+    "start": "powershell -ExecutionPolicy Bypass -File ./start-dev.ps1"
+  }
+}
