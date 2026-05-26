@@ -8,6 +8,7 @@ import type {
   HoldingItem,
   HoldingListResponse,
   HotSectorResponse,
+  MomentumWatchResponse,
   ScreenResponse,
   TechnicalAnalysisResponse,
   TechnicalLevelsResponse
@@ -52,6 +53,7 @@ export const api = {
   runScreen: () => request<ScreenResponse>("/api/screen/run", { method: "POST" }),
   results: () => request<ScreenResponse>("/api/screen/results"),
   hotSectors: (limit = 30) => request<HotSectorResponse>(`/api/sectors/hot?limit=${limit}`),
+  momentumWatchlist: (limit = 60) => request<MomentumWatchResponse>(`/api/momentum/watchlist?limit=${limit}`),
   technicalLevels: (code: string) => request<TechnicalLevelsResponse>(`/api/stocks/${code}/technical-levels`),
   technicalAnalysis: (code: string) => request<TechnicalAnalysisResponse>(`/api/stocks/${code}/technical-analysis`),
   aiRemarks: (limit: number) =>

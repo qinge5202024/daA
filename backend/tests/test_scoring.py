@@ -7,7 +7,7 @@ import pandas as pd
 
 from backend.app.data_service import standardize_frame
 from backend.app.models import AppConfig
-from backend.app.scoring import _percent_rank, build_hot_sectors, run_screen
+from backend.app.scoring import _percent_rank, build_hot_sectors, build_momentum_watchlist, run_screen
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -130,6 +130,34 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(first.metrics["fund_flow_source"], "同花顺资金净额代理")
         self.assertEqual(hot.sectors[0].fund_flow_source, "同花顺资金净额代理汇总")
         self.assertIn("资金净额", hot.sectors[0].fund_validation)
+
+    def test_momentum_watchlist_prioritizes_active_fund_validated_stocks(self) -> None:
+        frame = standardize_frame(
+            pd.DataFrame(
+                {
+                    "代码": ["300001", "300002", "600001", "600002"],
+                    "名称": ["强势科技", "科技龙二", "弱势消费", "消费龙二"],
+                    "板块": ["科技", "科技", "消费", "消费"],
+                    "行业": ["科技", "科技", "消费", "消费"],
+                    "总市值": [200_000_000_000, 90_000_000_000, 120_000_000_000, 80_000_000_000],
+                    "成交额": [8_000_000_000, 5_000_000_000, 2_000_000_000, 1_500_000_000],
+                    "涨跌幅": [6.5, 4.2, -0.6, 0.2],
+                    "量比": [2.2, 1.8, 0.8, 0.7],
+                    "主力净流入": [900_000_000, 500_000_000, -120_000_000, -80_000_000],
+                    "主力净占比": [8.0, 5.4, -3.2, -2.1],
+                    "板块主力净流入": [1_400_000_000, 1_400_000_000, -200_000_000, -200_000_000],
+                    "板块主力净占比": [10.7, 10.7, -5.7, -5.7],
+                }
+            )
+        )
+
+        watchlist = build_momentum_watchlist(frame, limit=4)
+
+        self.assertEqual(watchlist.total_candidates, 4)
+        self.assertEqual(watchlist.results[0].code, "300001")
+        self.assertGreater(watchlist.results[0].momentum_score, watchlist.results[-1].momentum_score)
+        self.assertTrue(watchlist.results[0].reasons)
+        self.assertIn("fund_validation", watchlist.results[0].metrics)
 
 
 if __name__ == "__main__":

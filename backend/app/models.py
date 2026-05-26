@@ -126,6 +126,25 @@ class HotSectorResponse(BaseModel):
     sectors: list[HotSectorItem]
 
 
+class MomentumWatchItem(BaseModel):
+    code: str
+    name: str
+    sector: str
+    industry: str
+    momentum_score: float
+    rank: int
+    trigger_level: str
+    reasons: list[str]
+    risks: list[str]
+    metrics: dict[str, Any]
+
+
+class MomentumWatchResponse(BaseModel):
+    generated_at: str
+    total_candidates: int
+    results: list[MomentumWatchItem]
+
+
 class TechnicalLevel(BaseModel):
     key: str
     label: str

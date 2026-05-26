@@ -5,7 +5,17 @@ from typing import Any
 
 import pandas as pd
 
-from .models import AppConfig, HotSectorItem, HotSectorResponse, ScoreBreakdown, ScreenResponse, ScreenResult, SectorLeader
+from .models import (
+    AppConfig,
+    HotSectorItem,
+    HotSectorResponse,
+    MomentumWatchItem,
+    MomentumWatchResponse,
+    ScoreBreakdown,
+    ScreenResponse,
+    ScreenResult,
+    SectorLeader,
+)
 from .storage import utc_now_iso
 
 
@@ -565,3 +575,178 @@ def build_hot_sectors(frame: pd.DataFrame, limit: int = 30) -> HotSectorResponse
         )
 
     return HotSectorResponse(generated_at=utc_now_iso(), total_sectors=len(sectors), sectors=items)
+
+
+def _momentum_trigger_level(score: float) -> str:
+    if score >= 82:
+        return "强异动"
+    if score >= 70:
+        return "活跃跟踪"
+    return "初步异动"
+
+
+def _momentum_reasons(row: pd.Series) -> list[str]:
+    reasons: list[str] = []
+    pct_change = _safe_float(row.get("pct_change"))
+    volume_ratio = _safe_float(row.get("volume_ratio"))
+    turnover = _safe_float(row.get("turnover"))
+    fund_score = _safe_float(row.get("fund_validation_score"), 50)
+    sector_heat = _safe_float(row.get("short_sector_heat_score"), 50)
+
+    if _safe_float(row.get("pct_rank")) >= 75 or pct_change >= 3:
+        reasons.append("当日涨跌幅排名靠前，价格出现短线异动")
+    if _safe_float(row.get("turnover_rank")) >= 75 or turnover >= 1_000_000_000:
+        reasons.append("成交额放大，市场关注度提升")
+    if _safe_float(row.get("volume_rank")) >= 70 or volume_ratio >= 1.5:
+        reasons.append("量比抬升，交易活跃度高于常态")
+    if fund_score >= 70:
+        reasons.append(f"{row.get('fund_validation', '资金验证较好')}，资金侧提供确认")
+    if sector_heat >= 70:
+        reasons.append("所属板块同步走强，个股异动具备板块配合")
+    if not reasons:
+        reasons.append("量价活跃度进入短线观察区，需等待资金与板块进一步确认")
+    return reasons[:5]
+
+
+def _momentum_risks(row: pd.Series) -> list[str]:
+    risks: list[str] = []
+    pct_change = _safe_float(row.get("pct_change"))
+    main_flow = _safe_float(row.get("main_net_inflow"), _safe_float(row.get("large_net_inflow"), float("nan")))
+    fund_score = _safe_float(row.get("fund_validation_score"), 50)
+    turnover = _safe_float(row.get("turnover"))
+    pe = _safe_float(row.get("pe"))
+    volume_ratio = _safe_float(row.get("volume_ratio"))
+
+    if pct_change >= 7:
+        risks.append("当日涨幅较大，短线追高波动风险上升")
+    if pct_change > 0 and pd.notna(main_flow) and main_flow < 0:
+        risks.append("价格走强但资金净流出，存在量价背离")
+    if fund_score < 45:
+        risks.append(str(row.get("fund_validation") or "资金验证偏弱"))
+    if turnover > 0 and turnover < 100_000_000:
+        risks.append("成交额偏低，异动持续性需复核")
+    if pe > 80:
+        risks.append("PE 偏高，估值弹性与回撤风险并存")
+    if volume_ratio >= 3 and pct_change < 1:
+        risks.append("量比明显放大但价格响应有限，需警惕分歧")
+    if not risks:
+        risks.append("暂无明显短线量化风险，仍需结合公告和盘中盘口")
+    return risks[:5]
+
+
+def build_momentum_watchlist(frame: pd.DataFrame, limit: int = 60) -> MomentumWatchResponse:
+    if frame.empty:
+        return MomentumWatchResponse(generated_at=utc_now_iso(), total_candidates=0, results=[])
+
+    work = _add_fund_validation_columns(_prepare_numeric_frame(frame))
+    if work.empty:
+        return MomentumWatchResponse(generated_at=utc_now_iso(), total_candidates=0, results=[])
+
+    total_candidates = len(work)
+    sector_group = work.groupby("sector", dropna=False)
+    sector_pct = work["sector_pct_change"].fillna(sector_group["pct_change"].transform("mean"))
+    sector_turnover = work["sector_turnover"].fillna(sector_group["turnover"].transform(_sum_min_count))
+    sector_active_ratio = sector_group["pct_change"].transform(lambda values: (values.fillna(0) > 0).mean() * 100)
+    sector_volume = sector_group["volume_ratio"].transform("mean")
+    sector_flow = work["derived_sector_main_net_inflow"]
+    sector_flow_pct = work["derived_sector_main_net_inflow_pct"]
+
+    work["short_sector_heat_score"] = (
+        _percent_rank(sector_pct, True) * 0.30
+        + _percent_rank(sector_turnover, True) * 0.20
+        + _percent_rank(sector_active_ratio, True) * 0.20
+        + _percent_rank(sector_volume, True) * 0.10
+        + _percent_rank(sector_flow, True) * 0.15
+        + _percent_rank(sector_flow_pct, True) * 0.05
+    ).clip(0, 100)
+
+    stock_flow = work["main_net_inflow"].fillna(work["large_net_inflow"])
+    stock_flow_pct = work["main_net_inflow_pct"].fillna(work["large_net_inflow_pct"])
+    work["pct_rank"] = _percent_rank(work["pct_change"], True)
+    work["turnover_rank"] = _percent_rank(work["turnover"], True)
+    work["volume_rank"] = _percent_rank(work["volume_ratio"], True)
+    work["stock_flow_rank"] = _percent_rank(stock_flow, True)
+    work["stock_flow_pct_rank"] = _percent_rank(stock_flow_pct, True)
+    work["flow_combo_rank"] = (work["stock_flow_rank"] * 0.65 + work["stock_flow_pct_rank"] * 0.35).clip(0, 100)
+
+    has_any_fund_field = (
+        work["main_net_inflow"].notna()
+        | work["main_net_inflow_pct"].notna()
+        | work["large_net_inflow"].notna()
+        | work["large_net_inflow_pct"].notna()
+        | work["derived_sector_main_net_inflow"].notna()
+        | work["derived_sector_main_net_inflow_pct"].notna()
+    )
+    work["fund_component"] = work["flow_combo_rank"].where(has_any_fund_field, work["fund_validation_score"])
+
+    work["momentum_score"] = (
+        work["pct_rank"] * 0.25
+        + work["turnover_rank"] * 0.20
+        + work["volume_rank"] * 0.15
+        + work["fund_component"] * 0.15
+        + work["fund_validation_score"].fillna(50) * 0.10
+        + work["short_sector_heat_score"] * 0.15
+    ).clip(0, 100)
+
+    active = work[
+        (work["pct_change"].fillna(0) > 0)
+        | (work["volume_ratio"].fillna(0) >= 1.2)
+        | (work["turnover_rank"].fillna(0) >= 60)
+        | (work["fund_validation_score"].fillna(50) >= 70)
+        | (work["short_sector_heat_score"].fillna(50) >= 70)
+    ].copy()
+    if active.empty:
+        active = work.copy()
+
+    active = active.sort_values(
+        ["momentum_score", "pct_change", "turnover"],
+        ascending=[False, False, False],
+    ).head(max(1, limit))
+
+    metric_keys = [
+        "pct_change",
+        "turnover",
+        "volume_ratio",
+        "main_net_inflow",
+        "main_net_inflow_pct",
+        "large_net_inflow",
+        "large_net_inflow_pct",
+        "derived_sector_main_net_inflow",
+        "derived_sector_main_net_inflow_pct",
+        "sector_pct_change",
+        "sector_turnover",
+        "sector_turnover_growth",
+        "fund_validation",
+        "fund_validation_score",
+        "fund_flow_source",
+        "fund_flow_note",
+        "pe",
+        "pb",
+        "market_cap",
+        "pct_rank",
+        "turnover_rank",
+        "volume_rank",
+        "flow_combo_rank",
+        "short_sector_heat_score",
+    ]
+
+    results: list[MomentumWatchItem] = []
+    for rank, (_, row) in enumerate(active.iterrows(), start=1):
+        metrics = {key: _none_if_na(row.get(key)) for key in metric_keys}
+        score = round(_safe_float(row.get("momentum_score")), 1)
+        results.append(
+            MomentumWatchItem(
+                code=str(row.get("code") or ""),
+                name=str(row.get("name") or ""),
+                sector=str(row.get("sector") or "未分类"),
+                industry=str(row.get("industry") or "未分类"),
+                momentum_score=score,
+                rank=rank,
+                trigger_level=_momentum_trigger_level(score),
+                reasons=_momentum_reasons(row),
+                risks=_momentum_risks(row),
+                metrics=metrics,
+            )
+        )
+
+    return MomentumWatchResponse(generated_at=utc_now_iso(), total_candidates=total_candidates, results=results)

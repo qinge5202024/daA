@@ -29,13 +29,14 @@ from .models import (
     HoldingSaveRequest,
     HotSectorResponse,
     ImportResponse,
+    MomentumWatchResponse,
     RefreshResponse,
     ScreenResponse,
     TechnicalAnalysisResponse,
     TechnicalLevelsResponse,
 )
 from .paths import CONFIG_PATH, ensure_data_dirs
-from .scoring import build_hot_sectors, run_screen
+from .scoring import build_hot_sectors, build_momentum_watchlist, run_screen
 from .storage import (
     clear_ai_analysis,
     clear_holding_analysis,
@@ -343,6 +344,12 @@ async def get_results_api() -> ScreenResponse:
 async def hot_sectors_api(limit: int = 30) -> HotSectorResponse:
     capped_limit = max(1, min(limit, 100))
     return build_hot_sectors(load_stock_pool(), capped_limit)
+
+
+@app.get("/api/momentum/watchlist", response_model=MomentumWatchResponse)
+async def momentum_watchlist_api(limit: int = 60) -> MomentumWatchResponse:
+    capped_limit = max(1, min(limit, 200))
+    return build_momentum_watchlist(load_stock_pool(), capped_limit)
 
 
 @app.get("/api/stocks/{code}/technical-levels", response_model=TechnicalLevelsResponse)

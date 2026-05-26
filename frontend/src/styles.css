@@ -596,20 +596,25 @@ nav {
 
 .results-layout,
 .hot-layout,
+.momentum-layout,
 .detail-layout,
 .holdings-layout {
   display: grid;
   gap: 14px;
 }
 
-.holdings-strip {
-  grid-template-columns: 1fr 1.25fr 1.2fr 1.7fr;
-}
-
 .dashboard-strip {
   display: grid;
   grid-template-columns: 1.15fr 1fr 1fr 1fr 1.65fr;
   gap: 12px;
+}
+
+.dashboard-strip.holdings-strip {
+  grid-template-columns: 1fr 1.25fr 1.2fr 1.7fr;
+}
+
+.dashboard-strip.momentum-strip {
+  grid-template-columns: 1fr 1fr 1fr 1.55fr;
 }
 
 .dashboard-card {
@@ -898,6 +903,68 @@ tbody tr:hover,
   background: var(--blue-soft);
   border: 1px solid rgba(90, 200, 255, 0.26);
   border-radius: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trigger-pill {
+  display: inline-block;
+  max-width: 96px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 900;
+}
+
+.trigger-pill.strong {
+  color: #baffe8;
+  background: rgba(56, 240, 176, 0.2);
+  border: 1px solid rgba(56, 240, 176, 0.28);
+  box-shadow: 0 0 16px rgba(56, 240, 176, 0.14);
+}
+
+.trigger-pill.steady {
+  color: #ffe0a0;
+  background: var(--amber-soft);
+  border: 1px solid rgba(255, 194, 74, 0.28);
+}
+
+.trigger-pill.watch {
+  color: #b9edff;
+  background: var(--blue-soft);
+  border: 1px solid rgba(90, 200, 255, 0.26);
+}
+
+.momentum-table table {
+  min-width: 1320px;
+}
+
+.momentum-metrics {
+  display: grid;
+  gap: 4px;
+  min-width: 116px;
+}
+
+.momentum-metrics span {
+  margin-top: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inline-list {
+  display: grid;
+  gap: 4px;
+  max-width: 300px;
+  margin: 0;
+  padding-left: 16px;
+  color: #b9c6c9;
+  font-size: 12px;
+}
+
+.inline-list li {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

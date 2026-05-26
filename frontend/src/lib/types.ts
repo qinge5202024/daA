@@ -75,6 +75,25 @@ export type ScreenResponse = {
   results: ScreenResult[];
 };
 
+export type MomentumWatchItem = {
+  code: string;
+  name: string;
+  sector: string;
+  industry: string;
+  momentum_score: number;
+  rank: number;
+  trigger_level: string;
+  reasons: string[];
+  risks: string[];
+  metrics: Record<string, number | string | null>;
+};
+
+export type MomentumWatchResponse = {
+  generated_at: string;
+  total_candidates: number;
+  results: MomentumWatchItem[];
+};
+
 export type AiKeyPriceLevel = {
   label: string;
   price: number | null;

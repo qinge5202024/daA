@@ -35,6 +35,8 @@ import type {
   HoldingAnalysisResponse,
   HoldingItem,
   HotSectorResponse,
+  MomentumWatchItem,
+  MomentumWatchResponse,
   ScreenResponse,
   ScreenResult,
   ScoreWeights,
@@ -42,7 +44,7 @@ import type {
   TechnicalLevelsResponse
 } from "./lib/types";
 
-type View = "data" | "hot" | "strategy" | "results" | "detail" | "holdings";
+type View = "data" | "hot" | "momentum" | "strategy" | "results" | "detail" | "holdings";
 
 const scoreLabels: Record<keyof ScoreWeights, string> = {
   sector_heat: "板块资金",
@@ -196,12 +198,19 @@ function holdingLevelClass(label: string) {
   return "holding-level";
 }
 
+function triggerClass(level: string) {
+  if (level === "强异动") return "trigger-pill strong";
+  if (level === "活跃跟踪") return "trigger-pill steady";
+  return "trigger-pill watch";
+}
+
 function App() {
   const [view, setView] = useState<View>("data");
   const [status, setStatus] = useState<DataStatus | null>(null);
   const [config, setConfig] = useState<AppConfig>(defaultConfig);
   const [results, setResults] = useState<ScreenResponse | null>(null);
   const [hotSectors, setHotSectors] = useState<HotSectorResponse | null>(null);
+  const [momentumWatchlist, setMomentumWatchlist] = useState<MomentumWatchResponse | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<AiAnalysisResponse | null>(null);
   const [holdings, setHoldings] = useState<HoldingItem[]>([]);
   const [holdingAnalysis, setHoldingAnalysis] = useState<HoldingAnalysisResponse | null>(null);
@@ -224,20 +233,22 @@ function App() {
   }
 
   async function loadAll() {
-    const [statusData, configData, resultData, sectorData, analysisData, holdingData, holdingReviewData] =
+    const [statusData, configData, resultData, sectorData, momentumData, analysisData, holdingData, holdingReviewData] =
       await Promise.all([
-      api.status(),
-      api.config(),
-      api.results(),
-      api.hotSectors(),
-      api.aiAnalysis(),
-      api.holdings(),
-      api.holdingAnalysis()
-    ]);
+        api.status(),
+        api.config(),
+        api.results(),
+        api.hotSectors(),
+        api.momentumWatchlist(),
+        api.aiAnalysis(),
+        api.holdings(),
+        api.holdingAnalysis()
+      ]);
     setStatus(statusData);
     setConfig(configData);
     setResults(resultData);
     setHotSectors(sectorData);
+    setMomentumWatchlist(momentumData);
     setAiAnalysis(analysisData);
     setHoldings(holdingData.holdings);
     setHoldingAnalysis(holdingReviewData);
@@ -337,6 +348,7 @@ function App() {
       const data = await api.runScreen();
       setResults(data);
       setHotSectors(await api.hotSectors());
+      setMomentumWatchlist(await api.momentumWatchlist());
       syncSelected(data.results);
       setStatus(await api.status());
       resetAiReview();
@@ -352,6 +364,7 @@ function App() {
       setResults(data);
       syncSelected(data.results);
       setHotSectors(await api.hotSectors());
+      setMomentumWatchlist(await api.momentumWatchlist());
       resetAiReview();
     }, "策略配置已保存", "正在保存策略并刷新评分结果", "save");
   }
@@ -442,6 +455,7 @@ function App() {
         <nav>
           {navButton("data", "数据", <Database size={18} />)}
           {navButton("hot", "热点", <Flame size={18} />)}
+          {navButton("momentum", "短线", <Activity size={18} />)}
           {navButton("strategy", "策略", <SlidersHorizontal size={18} />)}
           {navButton("results", "结果", <ListFilter size={18} />)}
           {navButton("holdings", "持仓", <Briefcase size={18} />)}
@@ -461,13 +475,15 @@ function App() {
                 ? "数据工作台"
                 : view === "hot"
                   ? "热点板块"
-                  : view === "strategy"
-                    ? "策略配置"
-                    : view === "results"
-                      ? "观察名单"
-                      : view === "holdings"
-                        ? "持仓盯盘"
-                        : "个股详情"}
+                  : view === "momentum"
+                    ? "短线异动"
+                    : view === "strategy"
+                      ? "策略配置"
+                      : view === "results"
+                        ? "观察名单"
+                        : view === "holdings"
+                          ? "持仓盯盘"
+                          : "个股详情"}
             </h1>
             <p>{message}</p>
           </div>
@@ -547,6 +563,8 @@ function App() {
         )}
 
         {view === "hot" && <HotSectorsView data={hotSectors} />}
+
+        {view === "momentum" && <MomentumWatchView data={momentumWatchlist} />}
 
         {view === "strategy" && (
           <section className="strategy-layout">
@@ -1207,6 +1225,142 @@ function ResultTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function MomentumWatchView({ data }: { data: MomentumWatchResponse | null }) {
+  const items = data?.results ?? [];
+  const strongCount = items.filter((item) => item.trigger_level === "强异动").length;
+  const avgScore = averageScore(items.map((item) => item.momentum_score));
+  const topSector = items.reduce<Record<string, number>>((counter, item) => {
+    counter[item.sector] = (counter[item.sector] ?? 0) + 1;
+    return counter;
+  }, {});
+  const leadingSector = Object.entries(topSector).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "-";
+
+  if (items.length === 0) {
+    return (
+      <div className="empty-state">
+        <Activity size={28} />
+        <strong>暂无短线异动名单</strong>
+        <span>刷新免费行情或导入带涨跌幅、成交额、量比字段的数据后查看。</span>
+      </div>
+    );
+  }
+
+  return (
+    <section className="momentum-layout">
+      <div className="dashboard-strip momentum-strip">
+        <div className="dashboard-card primary">
+          <div>
+            <span>短线异动均分</span>
+            <strong>{avgScore.toFixed(1)}</strong>
+          </div>
+          <Activity size={22} />
+        </div>
+        <div className="dashboard-card">
+          <div>
+            <span>入选数量</span>
+            <strong>{items.length}</strong>
+          </div>
+          <Layers3 size={22} />
+          <small>候选池 {data?.total_candidates ?? 0} 只</small>
+        </div>
+        <div className="dashboard-card">
+          <div>
+            <span>强异动</span>
+            <strong>{strongCount}</strong>
+          </div>
+          <Flame size={22} />
+        </div>
+        <div className="dashboard-card wide">
+          <div>
+            <span>集中板块</span>
+            <strong>{leadingSector}</strong>
+          </div>
+          <BarChart3 size={22} />
+          <ScoreBar score={items[0]?.metrics.short_sector_heat_score as number | null | undefined} />
+        </div>
+      </div>
+
+      <div className="table-toolbar">
+        <div>
+          <strong>{items.length}</strong>
+          <span>只短线异动股票，按量价、资金验证和板块同步性排序</span>
+        </div>
+        <span>短线异动仅用于研究观察，不构成买卖建议。</span>
+      </div>
+
+      <div className="table-wrap momentum-table">
+        <table>
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>股票</th>
+              <th>异动分</th>
+              <th>触发级别</th>
+              <th>板块</th>
+              <th>量价</th>
+              <th>资金验证</th>
+              <th>触发因素</th>
+              <th>风险</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <MomentumRow item={item} key={item.code} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function MomentumRow({ item }: { item: MomentumWatchItem }) {
+  const labels = fundFlowLabels(item.metrics.fund_flow_source);
+  return (
+    <tr>
+      <td>
+        <strong>#{item.rank}</strong>
+        <span>短线观察</span>
+      </td>
+      <td>
+        <strong>{item.name}</strong>
+        <span>{item.code}</span>
+      </td>
+      <td>
+        <span className={scoreClass(item.momentum_score)}>{item.momentum_score}</span>
+      </td>
+      <td>
+        <span className={triggerClass(item.trigger_level)}>{item.trigger_level}</span>
+      </td>
+      <td className="sector-cell">
+        <strong>{item.sector}</strong>
+        <span>{item.industry}</span>
+      </td>
+      <td>
+        <div className="momentum-metrics">
+          <span>涨跌 {formatPercent(item.metrics.pct_change)}</span>
+          <span>量比 {formatNumber(item.metrics.volume_ratio)}</span>
+          <span>成交 {formatMoney(item.metrics.turnover)}</span>
+        </div>
+      </td>
+      <td>
+        <span className="fund-tag">{item.metrics.fund_validation ?? "-"}</span>
+        <span>{labels.flow} {formatMoney(item.metrics.main_net_inflow)}</span>
+      </td>
+      <td>
+        <ul className="inline-list">
+          {item.reasons.slice(0, 2).map((reason) => (
+            <li key={reason}>{reason}</li>
+          ))}
+        </ul>
+      </td>
+      <td>
+        <span className="risk-pill">{item.risks[0]}</span>
+      </td>
+    </tr>
   );
 }
 
