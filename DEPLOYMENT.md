@@ -1,6 +1,6 @@
 # Deployment Guide
 
-This project is best deployed as:
+This project can be deployed as a free preview with:
 
 - Frontend on Vercel
 - Backend on Render
@@ -10,7 +10,7 @@ That split matches the current codebase:
 - `frontend/` is a Vite React app and builds to static files cleanly.
 - `backend/` is a FastAPI service that needs Python packages, longer-running refresh jobs, and a writable `data/` directory.
 
-## Recommended Architecture
+## Free Preview Architecture
 
 Frontend:
 
@@ -24,16 +24,19 @@ Backend:
 
 - Provider: Render Web Service
 - Runtime: Python
+- Plan: Free
 - Build command: `pip install -r requirements.txt`
 - Start command: `python run_backend.py --host 0.0.0.0 --port $PORT --no-reload`
-- Persistent disk mount: `/data`
+- Data directory: `/tmp/ashare-watchlist-data`
+
+Important: Render free services do not provide persistent disks. Watchlists, holdings, cache, status, and generated results can be lost after restart, sleep, or redeploy.
 
 ## Backend Environment Variables
 
 Set these in Render:
 
 ```env
-APP_DATA_DIR=/data
+APP_DATA_DIR=/tmp/ashare-watchlist-data
 AI_BASE_URL=https://api.deepseek.com
 AI_API_KEY=replace-with-your-key
 AI_MODEL=deepseek-v4-flash
@@ -42,7 +45,7 @@ CORS_ALLOW_ORIGINS=https://your-frontend-domain.vercel.app
 
 Notes:
 
-- `APP_DATA_DIR=/data` keeps watchlists, cache, status, and generated results on the Render persistent disk.
+- `APP_DATA_DIR=/tmp/ashare-watchlist-data` is for free preview deployments only. It is not durable storage.
 - `CORS_ALLOW_ORIGINS` should match the final Vercel production domain. Multiple origins can be comma-separated.
 
 ## Frontend Environment Variables
@@ -79,7 +82,13 @@ The app stores local state under `data/`, including:
 - generated screening results
 - ambush pipeline snapshots
 
-On Render, those files should live on the mounted persistent disk via `APP_DATA_DIR=/data`.
+On the free Render preview, those files live under `/tmp/ashare-watchlist-data` and can be cleared by the platform.
+
+For a durable production deployment, use a Render paid service with a persistent disk mounted at `/data`, then set:
+
+```env
+APP_DATA_DIR=/data
+```
 
 ## Security Notes
 

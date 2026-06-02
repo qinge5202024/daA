@@ -2,13 +2,13 @@ services:
   - type: web
     name: ashare-watchlist-api
     runtime: python
-    plan: starter
+    plan: free
     rootDir: .
     buildCommand: pip install -r requirements.txt
     startCommand: python run_backend.py --host 0.0.0.0 --port $PORT --no-reload
     envVars:
       - key: APP_DATA_DIR
-        value: /data
+        value: /tmp/ashare-watchlist-data
       - key: CORS_ALLOW_ORIGINS
         sync: false
       - key: AI_BASE_URL
@@ -17,7 +17,3 @@ services:
         sync: false
       - key: AI_MODEL
         value: deepseek-v4-flash
-    disk:
-      name: ashare-watchlist-data
-      mountPath: /data
-      sizeGB: 1
