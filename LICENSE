@@ -1,21 +1,49 @@
-MIT License
+A 股板块龙头观察名单工具自定义许可
 
-Copyright (c) 2026
+Copyright (c) 2026 qinge5202024
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+本项目采用 Source-Available Non-Resale License（源码可见、禁止转售许可）。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. 允许的使用
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+在遵守本许可全部条款的前提下，允许任何个人或组织免费使用本项目进行：
+
+- 个人学习、研究和自用部署。
+- 非商业内部试用。
+- 阅读、修改和二次开发源码。
+- 提交 Issue、建议和 Pull Request。
+
+2. 必须保留的声明
+
+任何复制、修改、分发或展示本项目及其衍生版本时，必须保留：
+
+- 作者署名：qinge5202024。
+- 本版权声明和许可文件。
+- 免责声明。
+- 禁止二次出售、禁止转售和禁止付费分发说明。
+
+3. 禁止的使用
+
+未经作者书面许可，禁止任何个人或组织：
+
+- 将本项目或其衍生版本作为软件、源码包、模板、课程资料、训练营赠品、会员工具、付费社群资料、SaaS 服务或其他数字产品进行售卖、出租、转授权、转售或付费分发。
+- 对本项目进行改名、换皮、轻微修改后进行商业售卖或付费分发。
+- 删除、隐藏、弱化或篡改作者署名、版权说明、免责声明或禁止转售说明。
+- 将本项目包装为投资建议、荐股服务、自动交易服务、代客理财工具或任何承诺收益的产品。
+- 使用本项目从事违法、欺诈、误导性投资宣传或违反证券监管要求的活动。
+
+4. 商业合作
+
+如需商业合作、商业部署、私有化交付、付费分发、SaaS 化运营、课程或培训使用，请先通过项目 Issues 联系作者并获得书面授权：
+
+https://github.com/qinge5202024/daA/issues
+
+5. 免责声明
+
+本项目仅用于学习、研究和观察，不构成任何投资建议。公开免费数据可能延迟、缺失、错误或失真。任何交易决策都应由使用者独立判断并自行承担风险。
+
+本项目按“现状”提供，不提供任何明示或暗示担保，包括但不限于适销性、特定用途适用性、准确性、连续可用性、收益保证或不侵权担保。作者不对任何因使用或无法使用本项目造成的损失、风险、交易后果、数据错误或第三方索赔承担责任。
+
+6. 终止
+
+如果使用者违反本许可条款，其使用、复制、修改、分发和展示本项目的权利将自动终止。作者保留追究侵权和违约责任的权利。

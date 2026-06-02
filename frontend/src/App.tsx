@@ -8,12 +8,16 @@ import {
   BarChart3,
   Briefcase,
   CircleDollarSign,
+  Copyright,
   Database,
   Download,
+  ExternalLink,
   FileUp,
   Flame,
   FlaskConical,
   Gauge,
+  Handshake,
+  Info,
   Layers3,
   ListFilter,
   Plus,
@@ -22,6 +26,7 @@ import {
   Search,
   Settings2,
   Palette,
+  ShieldCheck,
   ShieldAlert,
   Trash2,
   Target,
@@ -55,7 +60,7 @@ import type {
   WatchlistItem
 } from "./lib/types";
 
-type View = "data" | "hot" | "momentum" | "ambush" | "strategy" | "results" | "watchlist" | "detail" | "holdings";
+type View = "data" | "hot" | "momentum" | "ambush" | "strategy" | "results" | "watchlist" | "detail" | "holdings" | "about";
 type CaptureMode = "single" | "long" | null;
 
 const scoreLabels: Record<keyof ScoreWeights, string> = {
@@ -849,6 +854,7 @@ function App() {
           {navButton("watchlist", "自选", <BadgeCheck size={18} />)}
           {navButton("holdings", "持仓", <Briefcase size={18} />)}
           {navButton("detail", "详情", <Search size={18} />)}
+          {navButton("about", "关于", <Info size={18} />)}
         </nav>
         <div className="theme-switch">
           <button
@@ -896,7 +902,9 @@ function App() {
                             ? "自选股池"
                             : view === "holdings"
                               ? "持仓盯盘"
-                              : "个股详情"}
+                              : view === "about"
+                                ? "关于项目"
+                                : "个股详情"}
             </h1>
             <p>{message}</p>
           </div>
@@ -1253,8 +1261,85 @@ function App() {
             onSave={handleSaveHoldings}
           />
         )}
+
+        {view === "about" && <AboutView />}
       </main>
     </div>
+  );
+}
+
+function AboutView() {
+  return (
+    <section className="about-layout">
+      <div className="tool-panel about-hero">
+        <div className="panel-title">
+          <Info size={19} />
+          <h2>作者介绍</h2>
+        </div>
+        <div className="about-hero-content">
+          <div>
+            <span className="about-kicker">qinge5202024 / A 股研究工具</span>
+            <h3>把行情、资金、技术位和 AI 复核放进同一个观察台。</h3>
+            <p>
+              这个项目由 qinge5202024 发起，定位是给普通股民和个人研究者使用的 A 股观察名单工具。
+              它不承诺神奇预测，也不输出买卖指令，只尽量把公开数据、筛选逻辑、风险标签和复核理由摆到台面上。
+            </p>
+          </div>
+          <a
+            className="about-link"
+            href="https://github.com/qinge5202024/daA/issues"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <Handshake size={18} />
+            <span>合作联系</span>
+            <ExternalLink size={15} />
+          </a>
+        </div>
+      </div>
+
+      <div className="about-grid">
+        <div className="about-card">
+          <Copyright size={22} />
+          <h3>版权说明</h3>
+          <p>
+            Copyright © 2026 qinge5202024. 项目名称、界面设计、筛选逻辑、文档和源码版权归作者所有。
+            公开源码不等于放弃版权，也不等于允许拿去包装转卖。
+          </p>
+        </div>
+        <div className="about-card">
+          <ShieldCheck size={22} />
+          <h3>允许使用</h3>
+          <p>
+            允许个人学习、研究、自用部署、非商业内部试用，也欢迎提交 Issue、建议和改进 PR。
+            二次开发时必须保留作者署名、版权声明、免责声明和禁止转售说明。
+          </p>
+        </div>
+        <div className="about-card danger">
+          <ShieldAlert size={22} />
+          <h3>禁止二次出售</h3>
+          <p>
+            禁止将本项目或改名后的衍生版本作为软件、课程资料、训练营赠品、会员工具、SaaS 服务或源码包进行售卖、出租、转授权或付费分发。
+          </p>
+        </div>
+        <div className="about-card">
+          <Handshake size={22} />
+          <h3>合作联系</h3>
+          <p>
+            功能共建、数据源适配、私有化部署、策略模块合作和问题反馈，请通过 GitHub Issues 联系。
+            商业合作必须先获得作者书面授权。
+          </p>
+        </div>
+        <div className="about-card wide">
+          <CircleDollarSign size={22} />
+          <h3>使用边界</h3>
+          <p>
+            本工具只用于研究观察，不构成投资建议，不提供买卖点、仓位管理或自动交易。公开免费数据可能延迟、缺失或失真，
+            任何交易决策都应由使用者独立判断并自行承担风险。
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
