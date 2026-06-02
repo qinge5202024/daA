@@ -244,6 +244,7 @@ class DataServiceTests(unittest.TestCase):
                         "lb": "1.1",
                         "pe_ttm": "8.5",
                         "pn": "0.6",
+                        "zxj": str(10 + index / 10),
                     }
                     for index in range(10)
                 ],
@@ -260,6 +261,7 @@ class DataServiceTests(unittest.TestCase):
             self.assertTrue(cache_quality(frame)["is_scoring_quality"])
             self.assertEqual(frame.iloc[0]["sector"], "银行")
             self.assertEqual(frame.iloc[0]["market_cap"], 10_000_000_000)
+            self.assertEqual(frame.iloc[0]["current_price"], 10.0)
 
 
 if __name__ == "__main__":

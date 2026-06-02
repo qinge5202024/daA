@@ -127,6 +127,20 @@ export type AiAnalysisResponse = {
 
 export type HoldingPeriod = "short" | "long" | string;
 
+export type WatchlistItem = {
+  id: string;
+  code: string;
+  name: string;
+  group: string;
+  note: string;
+  added_at: string;
+};
+
+export type WatchlistResponse = {
+  generated_at: string;
+  watchlist: WatchlistItem[];
+};
+
 export type HoldingItem = {
   id: string;
   code: string;
@@ -158,6 +172,7 @@ export type HoldingAnalysisItem = {
   cost_price: number;
   quantity: number;
   last_price: number | null;
+  last_price_source: string | null;
   position_value: number | null;
   unrealized_profit: number | null;
   unrealized_profit_pct: number | null;
@@ -178,6 +193,106 @@ export type HoldingAnalysisResponse = {
   ok: boolean;
   message: string;
   analyses: HoldingAnalysisItem[];
+};
+
+export type AmbushStage = "观察池" | "蓄势中" | "待点火" | "触发条件" | "已失效";
+
+export type AmbushSignalDetail = {
+  signal_key: string;
+  signal_name: string;
+  group: string;
+  confidence: number;
+  details: string;
+};
+
+export type AmbushThematicScore = {
+  matched_concepts: string[];
+  concept_count: number;
+  hot_concept_hits: number;
+  sector_relevance: number;
+  score: number;
+};
+
+export type AmbushConfirmCondition = {
+  condition: string;
+  trigger_price: number | null;
+  price_basis: string;
+  stop_loss: string;
+  target: string;
+  time_limit_days: number;
+};
+
+export type AmbushItem = {
+  code: string;
+  name: string;
+  sector: string;
+  industry: string;
+  stage: AmbushStage;
+  total_score: number;
+  structure_score: number;
+  quality_score: number;
+  thematic_score: number;
+  signals: AmbushSignalDetail[];
+  thematic: AmbushThematicScore;
+  conditions: AmbushConfirmCondition[];
+  entered_at: string;
+  last_signal_at: string;
+  days_in_pipeline: number;
+  expired_reason: string;
+};
+
+export type AmbushConfig = {
+  max_watch_pool: number;
+  max_brewing_pool: number;
+  max_ignition_pool: number;
+  structure_weight: number;
+  quality_weight: number;
+  thematic_weight: number;
+  ambush_weight: number;
+  structure_threshold: number;
+  ignition_threshold: number;
+  expire_days: number;
+  hot_concept_list: string[];
+};
+
+export type AmbushPipelineResponse = {
+  generated_at: string;
+  watch_pool: AmbushItem[];
+  brewing_pool: AmbushItem[];
+  ignition_pool: AmbushItem[];
+  triggered: AmbushItem[];
+  expired: AmbushItem[];
+  new_today: number;
+  triggered_today: number;
+  expired_today: number;
+};
+
+export type AmbushBriefItem = {
+  code: string;
+  name: string;
+  sector: string;
+  stage: string;
+  total_score: number;
+  change: string; // new/promoted/new_signal/expired
+  detail: string;
+};
+
+export type AmbushBrief = {
+  generated_at: string;
+  pipeline_generated_at: string;
+  new_items_count: number;
+  promoted_count: number;
+  expired_count: number;
+  new_signal_count: number;
+  new_items: AmbushBriefItem[];
+  promoted_items: AmbushBriefItem[];
+  expired_items: AmbushBriefItem[];
+  new_signal_items: AmbushBriefItem[];
+  top_watch: AmbushBriefItem[];
+  top_brewing: AmbushBriefItem[];
+  top_ignition: AmbushBriefItem[];
+  seen_at: string | null;
+  has_unseen: boolean;
 };
 
 export type SectorLeader = {
@@ -262,4 +377,38 @@ export type TechnicalAnalysisResponse = {
   patterns: CandlestickPattern[];
   signals: TechnicalSignal[];
   risks: string[];
+};
+
+export type KlineScenarioBand = {
+  horizon_days: number;
+  label: string;
+  downside_price: number | null;
+  base_price: number | null;
+  upside_price: number | null;
+  downside_return_pct: number | null;
+  base_return_pct: number | null;
+  upside_return_pct: number | null;
+  probability_note: string;
+  basis: string;
+};
+
+export type KlineScenarioResponse = {
+  code: string;
+  name: string;
+  generated_at: string;
+  trade_date: string | null;
+  last_close: number | null;
+  source: string;
+  lookback_days: number;
+  trend_context: string;
+  volatility_state: string;
+  range_state: string;
+  volume_state: string;
+  summary: string;
+  scenario_bands: KlineScenarioBand[];
+  sequence_signals: TechnicalSignal[];
+  support_levels: TechnicalLevel[];
+  resistance_levels: TechnicalLevel[];
+  data_gaps: string[];
+  research_only_note: string;
 };

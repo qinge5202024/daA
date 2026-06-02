@@ -23,5 +23,11 @@ data/results/
 data/config.json
 data/status.json
 data/holdings.json
+data/watchlist.json
+data/ambush_config.json
+data/ambush_pipeline.json
+data/ambush_snapshot.json
 data/*-dev.out.log
 data/*-dev.err.log
+backups/
+backend/nul

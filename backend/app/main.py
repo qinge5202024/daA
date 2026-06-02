@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .ai_service import analyze_watchlist, generate_remark
+from .ambush_service import (
+    compute_ambush_brief,
+    get_or_compute_brief,
+    load_ambush_config,
+    load_ambush_pipeline,
+    mark_brief_seen,
+    run_ambush_pipeline,
+    save_ambush_config,
+    save_ambush_pipeline,
+    analyze_ambush_potential,
+)
 from .data_service import (
     cache_quality,
     fetch_public_stock_pool,
@@ -20,6 +32,10 @@ from .models import (
     AiRemarkRequest,
     AiAnalysisRequest,
     AiAnalysisResponse,
+    AmbushBrief,
+    AmbushConfig,
+    AmbushPipelineResponse,
+    AmbushResponse,
     AppConfig,
     DataStatus,
     FinancialMetricsRefreshResponse,
@@ -28,12 +44,16 @@ from .models import (
     HoldingListResponse,
     HoldingSaveRequest,
     HotSectorResponse,
+    KlineScenarioResponse,
     ImportResponse,
     MomentumWatchResponse,
     RefreshResponse,
     ScreenResponse,
     TechnicalAnalysisResponse,
     TechnicalLevelsResponse,
+    WatchlistItem,
+    WatchlistResponse,
+    WatchlistSaveRequest,
 )
 from .paths import CONFIG_PATH, ensure_data_dirs
 from .scoring import build_hot_sectors, build_momentum_watchlist, run_screen
@@ -46,20 +66,29 @@ from .storage import (
     load_holdings,
     load_results,
     load_status,
+    load_watchlist,
     save_config,
     save_ai_analysis,
     save_holding_analysis,
     save_holdings,
     save_results,
     save_status,
+    save_watchlist,
     utc_now_iso,
 )
-from .technical import calculate_technical_analysis, calculate_technical_levels, normalize_stock_code
+from .technical import calculate_kline_scenario, calculate_technical_analysis, calculate_technical_levels, normalize_stock_code
 
 
 refresh_lock = asyncio.Lock()
 daily_refresh_task: asyncio.Task[None] | None = None
 manual_refresh_task: asyncio.Task[RefreshResponse] | None = None
+
+
+def _cors_origins() -> list[str]:
+    defaults = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "")
+    configured = [item.strip() for item in raw.replace("\n", ",").split(",") if item.strip()]
+    return list(dict.fromkeys([*defaults, *configured]))
 
 
 def _results_include_current_metrics(results: ScreenResponse) -> bool:
@@ -86,6 +115,50 @@ def _save_holdings(request: HoldingSaveRequest) -> HoldingListResponse:
     response = HoldingListResponse(generated_at=utc_now_iso(), holdings=holdings)
     save_holdings(response)
     clear_holding_analysis()
+    return response
+
+
+def _stock_name_lookup() -> dict[str, str]:
+    try:
+        frame = load_stock_pool()
+    except Exception:
+        return {}
+    if frame.empty or "code" not in frame.columns or "name" not in frame.columns:
+        return {}
+    return {
+        normalize_stock_code(row["code"]): str(row["name"]).strip()
+        for _, row in frame[["code", "name"]].dropna(subset=["code"]).iterrows()
+        if str(row.get("name", "")).strip()
+    }
+
+
+def _save_watchlist(request: WatchlistSaveRequest) -> WatchlistResponse:
+    existing_by_code = {item.code: item for item in load_watchlist().watchlist if item.code}
+    name_by_code = _stock_name_lookup()
+    normalized_items: list[WatchlistItem] = []
+    seen: set[str] = set()
+    now = utc_now_iso()
+
+    for item in request.watchlist:
+        code = normalize_stock_code(item.code)
+        if not code or code in seen:
+            continue
+        previous = existing_by_code.get(code)
+        name = item.name.strip() or (previous.name if previous else "") or name_by_code.get(code, "")
+        normalized_items.append(
+            WatchlistItem(
+                id=item.id or (previous.id if previous else "") or f"watch-{code}",
+                code=code,
+                name=name,
+                group=item.group.strip() or (previous.group if previous else "") or "默认",
+                note=item.note.strip(),
+                added_at=item.added_at or (previous.added_at if previous else "") or now,
+            )
+        )
+        seen.add(code)
+
+    response = WatchlistResponse(generated_at=now, watchlist=normalized_items)
+    save_watchlist(response)
     return response
 
 
@@ -193,11 +266,12 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="A 股板块龙头观察名单工具", version="1.0.0", lifespan=lifespan)
+cors_origins = _cors_origins()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials="*" not in cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -341,6 +415,7 @@ async def get_results_api() -> ScreenResponse:
 
 
 @app.get("/api/sectors/hot", response_model=HotSectorResponse)
+@app.get("/api/sector/hot", response_model=HotSectorResponse)
 async def hot_sectors_api(limit: int = 30) -> HotSectorResponse:
     capped_limit = max(1, min(limit, 100))
     return build_hot_sectors(load_stock_pool(), capped_limit)
@@ -376,6 +451,18 @@ async def technical_analysis_api(code: str) -> TechnicalAnalysisResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/stocks/{code}/kline-scenario", response_model=KlineScenarioResponse)
+async def kline_scenario_api(code: str) -> KlineScenarioResponse:
+    normalized = normalize_stock_code(code)
+    frame = load_stock_pool()
+    matched = frame[frame["code"] == normalized]
+    name = str(matched.iloc[0]["name"]) if not matched.empty else normalized
+    try:
+        return await asyncio.to_thread(calculate_kline_scenario, normalized, name)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/ai/remarks", response_model=ScreenResponse)
 async def ai_remarks_api(request: AiRemarkRequest) -> ScreenResponse:
     results = load_results()
@@ -406,6 +493,69 @@ async def ai_analyze_watchlist_api(request: AiAnalysisRequest) -> AiAnalysisResp
     analysis = await analyze_watchlist(results, request)
     save_ai_analysis(analysis)
     return analysis
+
+
+@app.post("/api/ambush/run", response_model=AmbushPipelineResponse)
+async def run_ambush_api() -> AmbushPipelineResponse:
+    config = load_ambush_config()
+    pipeline = run_ambush_pipeline(config)
+    save_ambush_pipeline(pipeline)
+    return pipeline
+
+
+@app.get("/api/ambush/pipeline", response_model=AmbushPipelineResponse)
+async def get_ambush_pipeline_api() -> AmbushPipelineResponse:
+    pipeline = load_ambush_pipeline()
+    if pipeline is not None:
+        return pipeline
+    config = load_ambush_config()
+    pipeline = run_ambush_pipeline(config)
+    save_ambush_pipeline(pipeline)
+    return pipeline
+
+
+@app.get("/api/ambush/config", response_model=AmbushConfig)
+async def get_ambush_config_api() -> AmbushConfig:
+    return load_ambush_config()
+
+
+@app.put("/api/ambush/config", response_model=AmbushConfig)
+async def put_ambush_config_api(config: AmbushConfig) -> AmbushConfig:
+    save_ambush_config(config)
+    return config
+
+
+@app.post("/api/ambush/refresh-concepts")
+async def refresh_concepts_api() -> dict[str, str]:
+    from .ambush_fetcher import load_or_build_concept_map
+    load_or_build_concept_map(force_refresh=True)
+    return {"message": "概念板块缓存已刷新"}
+
+
+@app.get("/api/ambush/brief", response_model=AmbushBrief)
+async def get_ambush_brief_api() -> AmbushBrief:
+    brief = get_or_compute_brief()
+    return brief
+
+
+@app.post("/api/ambush/brief/seen", response_model=AmbushBrief)
+async def mark_ambush_brief_seen_api() -> AmbushBrief:
+    return mark_brief_seen()
+
+
+@app.post("/api/ambush/brief/refresh", response_model=AmbushBrief)
+async def refresh_ambush_brief_api() -> AmbushBrief:
+    return compute_ambush_brief()
+
+
+@app.get("/api/watchlist", response_model=WatchlistResponse)
+async def get_watchlist_api() -> WatchlistResponse:
+    return load_watchlist()
+
+
+@app.put("/api/watchlist", response_model=WatchlistResponse)
+async def put_watchlist_api(request: WatchlistSaveRequest) -> WatchlistResponse:
+    return _save_watchlist(request)
 
 
 @app.get("/api/holdings", response_model=HoldingListResponse)

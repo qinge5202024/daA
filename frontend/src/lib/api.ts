@@ -1,4 +1,7 @@
 import type {
+  AmbushBrief,
+  AmbushConfig,
+  AmbushPipelineResponse,
   AppConfig,
   AiAnalysisResponse,
   DataStatus,
@@ -8,14 +11,24 @@ import type {
   HoldingItem,
   HoldingListResponse,
   HotSectorResponse,
+  KlineScenarioResponse,
   MomentumWatchResponse,
   ScreenResponse,
   TechnicalAnalysisResponse,
-  TechnicalLevelsResponse
+  TechnicalLevelsResponse,
+  WatchlistItem,
+  WatchlistResponse
 } from "./types";
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
+
+function apiUrl(url: string) {
+  if (/^https?:\/\//.test(url)) return url;
+  return `${API_BASE_URL}${url}`;
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, options);
+  const response = await fetch(apiUrl(url), options);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `请求失败：${response.status}`);
@@ -56,6 +69,7 @@ export const api = {
   momentumWatchlist: (limit = 60) => request<MomentumWatchResponse>(`/api/momentum/watchlist?limit=${limit}`),
   technicalLevels: (code: string) => request<TechnicalLevelsResponse>(`/api/stocks/${code}/technical-levels`),
   technicalAnalysis: (code: string) => request<TechnicalAnalysisResponse>(`/api/stocks/${code}/technical-analysis`),
+  klineScenario: (code: string) => request<KlineScenarioResponse>(`/api/stocks/${code}/kline-scenario`),
   aiRemarks: (limit: number) =>
     request<ScreenResponse>("/api/ai/remarks", {
       method: "POST",
@@ -77,5 +91,29 @@ export const api = {
       body: JSON.stringify({ holdings })
     }),
   holdingAnalysis: () => request<HoldingAnalysisResponse>("/api/holdings/analysis"),
-  analyzeHoldings: () => request<HoldingAnalysisResponse>("/api/holdings/analyze", { method: "POST" })
+  analyzeHoldings: () => request<HoldingAnalysisResponse>("/api/holdings/analyze", { method: "POST" }),
+  watchlist: () => request<WatchlistResponse>("/api/watchlist"),
+  saveWatchlist: (watchlist: WatchlistItem[]) =>
+    request<WatchlistResponse>("/api/watchlist", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watchlist })
+    }),
+  ambushPipeline: () => request<AmbushPipelineResponse>("/api/ambush/pipeline"),
+  runAmbush: () => request<AmbushPipelineResponse>("/api/ambush/run", { method: "POST" }),
+  ambushConfig: () => request<AmbushConfig>("/api/ambush/config"),
+  saveAmbushConfig: (config: AmbushConfig) =>
+    request<AmbushConfig>("/api/ambush/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config)
+    }),
+  refreshConcepts: () =>
+    request<{ message: string }>("/api/ambush/refresh-concepts", { method: "POST" }),
+  ambushBrief: () =>
+    request<AmbushBrief>("/api/ambush/brief"),
+  markBriefSeen: () =>
+    request<AmbushBrief>("/api/ambush/brief/seen", { method: "POST" }),
+  refreshBrief: () =>
+    request<AmbushBrief>("/api/ambush/brief/refresh", { method: "POST" })
 };

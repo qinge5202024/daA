@@ -61,6 +61,7 @@ STANDARD_COLUMNS = [
     "name",
     "sector",
     "industry",
+    "current_price",
     "market_cap",
     "turnover",
     "pct_change",
@@ -105,6 +106,13 @@ COLUMN_ALIASES: dict[str, str] = {
     "所属行业": "industry",
     "sector": "sector",
     "industry": "industry",
+    "最新价": "current_price",
+    "最新": "current_price",
+    "现价": "current_price",
+    "当前价": "current_price",
+    "current_price": "current_price",
+    "last_price": "current_price",
+    "price": "current_price",
     "总市值": "market_cap",
     "市值": "market_cap",
     "流通市值": "market_cap",
@@ -446,7 +454,7 @@ def _request_eastmoney_json(urls: list[str], params: dict[str, str]) -> dict[str
     for attempt in range(3):
         for url in urls:
             try:
-                response = requests.get(url, params=params, headers=EASTMONEY_HEADERS, timeout=20)
+                response = requests.get(url, params=params, headers=EASTMONEY_HEADERS, timeout=20, trust_env=False)
                 response.raise_for_status()
                 return response.json()
             except Exception as exc:
@@ -503,6 +511,7 @@ def _eastmoney_stock_spot() -> pd.DataFrame:
             "name": frame.get("f14"),
             "sector": frame.get("f100"),
             "industry": frame.get("f100"),
+            "current_price": frame.get("f2"),
             "market_cap": frame.get("f20"),
             "turnover": frame.get("f6"),
             "pct_change": frame.get("f3"),
@@ -989,6 +998,7 @@ def fetch_akshare_stock_pool() -> pd.DataFrame:
     rename_map = {
         "代码": "code",
         "名称": "name",
+        "最新价": "current_price",
         "总市值": "market_cap",
         "成交额": "turnover",
         "涨跌幅": "pct_change",
@@ -1047,7 +1057,7 @@ def _parse_ths_page_count(html: str) -> int:
 def _fetch_ths_industry_page(code: str, page: int) -> tuple[pd.DataFrame, int]:
     suffix = "" if page == 1 else f"page/{page}/"
     url = f"http://q.10jqka.com.cn/thshy/detail/code/{code}/{suffix}"
-    response = requests.get(url, headers=THS_HEADERS, timeout=20)
+    response = requests.get(url, headers=THS_HEADERS, timeout=20, trust_env=False)
     response.raise_for_status()
     response.encoding = "gbk"
     tables = pd.read_html(io.StringIO(response.text))
@@ -1142,7 +1152,7 @@ def _fetch_tencent_rank_page(offset: int, count: int = 200) -> tuple[list[dict[s
         "offset": str(offset),
         "count": str(count),
     }
-    response = requests.get(url, params=params, headers=TENCENT_HEADERS, timeout=20)
+    response = requests.get(url, params=params, headers=TENCENT_HEADERS, timeout=20, trust_env=False)
     response.raise_for_status()
     payload = response.json()
     if payload.get("code") != 0:
@@ -1181,6 +1191,7 @@ def _fetch_tencent_market_frame() -> pd.DataFrame:
         {
             "code": raw.get("code"),
             "name": raw.get("name"),
+            "current_price": raw.get("zxj"),
             "market_cap": raw.get("zsz").map(lambda value: _scale_numeric(value, 100_000_000)),
             "turnover": raw.get("turnover").map(lambda value: _scale_numeric(value, 10_000)),
             "pct_change": raw.get("zdf"),
@@ -1275,6 +1286,7 @@ def fetch_sina_stock_pool() -> pd.DataFrame:
     rename_map = {
         "代码": "code",
         "名称": "name",
+        "最新价": "current_price",
         "成交额": "turnover",
         "涨跌幅": "pct_change",
     }
@@ -1320,6 +1332,7 @@ def fetch_sina_sector_stock_pool() -> pd.DataFrame:
                     "name": _optional_series(detail, "name"),
                     "sector": sector,
                     "industry": sector,
+                    "current_price": _optional_series(detail, "trade"),
                     "market_cap": mktcap,
                     "turnover": _optional_series(detail, "amount"),
                     "pct_change": _optional_series(detail, "changepercent"),

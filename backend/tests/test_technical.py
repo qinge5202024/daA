@@ -6,6 +6,7 @@ import pandas as pd
 
 from backend.app.technical import (
     baostock_symbol,
+    build_kline_scenario,
     build_technical_analysis,
     build_technical_levels,
     normalize_stock_code,
@@ -96,6 +97,33 @@ class TechnicalLevelTests(unittest.TestCase):
 
         self.assertIn("bullish_engulfing", pattern_keys)
         self.assertTrue(any(pattern.direction == "bullish" for pattern in response.patterns))
+
+    def test_build_kline_scenario_uses_historical_bands(self) -> None:
+        closes = [10 + index * 0.03 for index in range(180)]
+        frame = make_history(closes)
+
+        response = build_kline_scenario(frame, "600000", "测试银行")
+        horizons = {band.horizon_days for band in response.scenario_bands}
+
+        self.assertEqual(response.code, "600000")
+        self.assertEqual(response.lookback_days, 180)
+        self.assertIn(5, horizons)
+        self.assertIn(20, horizons)
+        self.assertGreater(len(response.sequence_signals), 0)
+        self.assertGreater(len(response.support_levels), 0)
+        self.assertNotIn("买入", response.summary)
+        self.assertNotIn("卖出", response.summary)
+        self.assertIn("历史K线分位", response.summary)
+
+    def test_build_kline_scenario_short_history_reports_gap(self) -> None:
+        frame = make_history([10, 10.1, 10.2, 10.15, 10.3])
+
+        response = build_kline_scenario(frame, "600000", "测试银行")
+
+        self.assertEqual(response.lookback_days, 5)
+        self.assertEqual(response.scenario_bands, [])
+        self.assertIn("历史K线少于30个交易日", response.data_gaps)
+        self.assertEqual(response.last_close, 10.3)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { toPng } from "html-to-image";
 import {
   Bot,
   Activity,
@@ -8,6 +9,7 @@ import {
   Briefcase,
   CircleDollarSign,
   Database,
+  Download,
   FileUp,
   Flame,
   FlaskConical,
@@ -19,6 +21,7 @@ import {
   Save,
   Search,
   Settings2,
+  Palette,
   ShieldAlert,
   Trash2,
   Target,
@@ -27,6 +30,12 @@ import {
 } from "lucide-react";
 import { api } from "./lib/api";
 import type {
+  AmbushBrief,
+  AmbushBriefItem,
+  AmbushConfig,
+  AmbushItem,
+  AmbushPipelineResponse,
+  AmbushSignalDetail,
   AppConfig,
   AiAnalysisResponse,
   AiStockAnalysis,
@@ -35,16 +44,19 @@ import type {
   HoldingAnalysisResponse,
   HoldingItem,
   HotSectorResponse,
+  KlineScenarioResponse,
   MomentumWatchItem,
   MomentumWatchResponse,
   ScreenResponse,
   ScreenResult,
   ScoreWeights,
   TechnicalAnalysisResponse,
-  TechnicalLevelsResponse
+  TechnicalLevelsResponse,
+  WatchlistItem
 } from "./lib/types";
 
-type View = "data" | "hot" | "momentum" | "strategy" | "results" | "detail" | "holdings";
+type View = "data" | "hot" | "momentum" | "ambush" | "strategy" | "results" | "watchlist" | "detail" | "holdings";
+type CaptureMode = "single" | "long" | null;
 
 const scoreLabels: Record<keyof ScoreWeights, string> = {
   sector_heat: "板块资金",
@@ -92,10 +104,25 @@ function formatDate(value: string | null) {
   return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
 
+function fileSafeTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
+
+function closestCaptureElement(target: EventTarget | null, selector: string) {
+  return target instanceof Element ? (target.closest(selector) as HTMLElement | null) : null;
+}
+
 function scoreClass(score: number) {
   if (score >= 75) return "score strong";
   if (score >= 60) return "score steady";
   return "score weak";
+}
+
+function heatClass(score: number) {
+  if (score >= 80) return "hot-80";
+  if (score >= 60) return "hot-60";
+  if (score >= 40) return "hot-40";
+  return "hot-0";
 }
 
 function directionClass(direction: string) {
@@ -109,6 +136,13 @@ function formatPrice(value: unknown) {
   const number = Number(value);
   if (!Number.isFinite(number)) return String(value);
   return number.toFixed(number >= 100 ? 2 : 3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatSignedPercent(value: unknown) {
+  if (value === null || value === undefined || value === "") return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return `${number > 0 ? "+" : ""}${number.toFixed(2)}%`;
 }
 
 function isProxyFundSource(source: unknown) {
@@ -171,6 +205,17 @@ function createHolding(): HoldingItem {
   };
 }
 
+function createWatchlistItem(): WatchlistItem {
+  return {
+    id: `watch-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    code: "",
+    name: "",
+    group: "默认",
+    note: "",
+    added_at: ""
+  };
+}
+
 function formatPercent(value: unknown) {
   if (value === null || value === undefined || value === "") return "-";
   const number = Number(value);
@@ -204,6 +249,54 @@ function triggerClass(level: string) {
   return "trigger-pill watch";
 }
 
+function detailFromMomentum(item: MomentumWatchItem): ScreenResult {
+  return {
+    code: item.code,
+    name: item.name,
+    sector: item.sector,
+    industry: item.industry,
+    total_score: item.momentum_score,
+    score: {
+      sector_heat: clampScore(item.metrics.short_sector_heat_score),
+      leadership: clampScore(item.metrics.turnover_rank),
+      quality: 50,
+      valuation: 50,
+      dividend: 50,
+      industry_risk: clampScore(100 - item.momentum_score * 0.35)
+    },
+    reasons: item.reasons,
+    risks: item.risks,
+    metrics: {
+      ...item.metrics,
+      fund_validation: item.metrics.fund_validation ?? item.trigger_level,
+      fund_validation_score: item.metrics.fund_validation_score ?? item.momentum_score
+    },
+    ai_remark: null
+  };
+}
+
+function detailFromWatchlist(item: WatchlistItem): ScreenResult {
+  return {
+    code: item.code,
+    name: item.name || item.code || "自选股",
+    sector: "自选股池",
+    industry: item.group || "默认",
+    total_score: 0,
+    score: {
+      sector_heat: 0,
+      leadership: 0,
+      quality: 0,
+      valuation: 0,
+      dividend: 0,
+      industry_risk: 0
+    },
+    reasons: ["用户手动加入自选股池，本地持久化保存。"],
+    risks: ["未进入当前筛选结果时，详情页仅展示可获取的行情和技术参考数据。"],
+    metrics: {},
+    ai_remark: item.note || null
+  };
+}
+
 function App() {
   const [view, setView] = useState<View>("data");
   const [status, setStatus] = useState<DataStatus | null>(null);
@@ -211,7 +304,10 @@ function App() {
   const [results, setResults] = useState<ScreenResponse | null>(null);
   const [hotSectors, setHotSectors] = useState<HotSectorResponse | null>(null);
   const [momentumWatchlist, setMomentumWatchlist] = useState<MomentumWatchResponse | null>(null);
+  const [ambushPipeline, setAmbushPipeline] = useState<AmbushPipelineResponse | null>(null);
+  const [ambushBrief, setAmbushBrief] = useState<AmbushBrief | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<AiAnalysisResponse | null>(null);
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
   const [holdings, setHoldings] = useState<HoldingItem[]>([]);
   const [holdingAnalysis, setHoldingAnalysis] = useState<HoldingAnalysisResponse | null>(null);
   const [priorityFilter, setPriorityFilter] = useState("全部");
@@ -219,6 +315,15 @@ function App() {
   const [message, setMessage] = useState("正在连接本地服务");
   const [busy, setBusy] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [captureMode, setCaptureMode] = useState<CaptureMode>(null);
+  const [captureTarget, setCaptureTarget] = useState<HTMLElement | null>(null);
+  const [captureSelection, setCaptureSelection] = useState<HTMLElement[]>([]);
+  const captureSelectionRef = useRef<HTMLElement[]>([]);
+  const [theme, setTheme] = useState<"jade" | "amber">(() => {
+    try { return (localStorage.getItem("gupiao-theme") as "jade" | "amber") ?? "jade"; }
+    catch { return "jade"; }
+  });
+  const [ambushDetail, setAmbushDetail] = useState<AmbushItem | null>(null);
 
   function resetAiReview() {
     setAiAnalysis(null);
@@ -233,7 +338,19 @@ function App() {
   }
 
   async function loadAll() {
-    const [statusData, configData, resultData, sectorData, momentumData, analysisData, holdingData, holdingReviewData] =
+    const [
+      statusData,
+      configData,
+      resultData,
+      sectorData,
+      momentumData,
+      analysisData,
+      watchlistData,
+      holdingData,
+      holdingReviewData,
+      ambushData,
+      briefData
+    ] =
       await Promise.all([
         api.status(),
         api.config(),
@@ -241,25 +358,261 @@ function App() {
         api.hotSectors(),
         api.momentumWatchlist(),
         api.aiAnalysis(),
+        api.watchlist(),
         api.holdings(),
-        api.holdingAnalysis()
+        api.holdingAnalysis(),
+        api.ambushPipeline().catch(() => null),
+        api.ambushBrief().catch(() => null)
       ]);
     setStatus(statusData);
     setConfig(configData);
     setResults(resultData);
     setHotSectors(sectorData);
     setMomentumWatchlist(momentumData);
+    setAmbushPipeline(ambushData);
+    setAmbushBrief(briefData);
     setAiAnalysis(analysisData);
+    setWatchlist(watchlistData.watchlist);
     setHoldings(holdingData.holdings);
     setHoldingAnalysis(holdingReviewData);
     syncSelected(resultData.results);
   }
+
+  // 主题切换：同步 data-theme 到 html 元素
+  useEffect(() => {
+    if (theme === "amber") {
+      document.documentElement.dataset.theme = "amber";
+    } else {
+      delete document.documentElement.dataset.theme;
+    }
+    try { localStorage.setItem("gupiao-theme", theme); }
+    catch { /* noop */ }
+  }, [theme]);
 
   useEffect(() => {
     loadAll()
       .then(() => setMessage("本地服务已连接"))
       .catch((error) => setMessage(error instanceof Error ? error.message : "本地服务连接失败"));
   }, []);
+
+  // 进入潜伏视图时自动刷新简报
+  useEffect(() => {
+    if (view !== "ambush") return;
+    api.ambushBrief()
+      .then((data) => {
+        // 如果缓存简报已阅或无简报，尝试重新计算
+        if (!data.has_unseen) {
+          return api.refreshBrief();
+        }
+        return data;
+      })
+      .then((data) => setAmbushBrief(data))
+      .catch(() => {});
+  }, [view]);
+
+  function syncCaptureSelection(next: HTMLElement[]) {
+    const current = captureSelectionRef.current;
+    for (const element of current) {
+      if (!next.includes(element)) {
+        element.classList.remove("capture-selected");
+        element.removeAttribute("data-capture-order");
+      }
+    }
+    next.forEach((element, index) => {
+      element.classList.add("capture-selected");
+      element.setAttribute("data-capture-order", String(index + 1));
+    });
+    captureSelectionRef.current = next;
+    setCaptureSelection(next);
+  }
+
+  function clearCaptureSelection() {
+    syncCaptureSelection([]);
+  }
+
+  function switchCaptureMode(mode: Exclude<CaptureMode, null>) {
+    clearCaptureSelection();
+    setCaptureMode((current) => {
+      const next = current === mode ? null : mode;
+      setMessage(
+        next === "single"
+          ? "截图模式：移动到想保存的信息块，点击后自动导出 PNG，按 Esc 退出"
+          : next === "long"
+            ? "长图模式：按顺序点击多个信息块加入长图，再点导出长图"
+            : "截图模式已退出"
+      );
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    if (!captureMode) {
+      setCaptureTarget(null);
+      return;
+    }
+
+    const captureSelector =
+      ".tool-panel, .ai-panel, .table-toolbar, .table-wrap, .dashboard-strip, .dashboard-card, .hot-pulse, .sector-card, .holding-card, .detail-head";
+
+    function cleanupTarget() {
+      setCaptureTarget((current) => {
+        current?.classList.remove("capture-hover");
+        return null;
+      });
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const element = closestCaptureElement(event.target, captureSelector);
+      setCaptureTarget((current) => {
+        if (current === element) return current;
+        current?.classList.remove("capture-hover");
+        element?.classList.add("capture-hover");
+        return element;
+      });
+    }
+
+    async function handleClick(event: MouseEvent) {
+      const element = closestCaptureElement(event.target, captureSelector);
+      if (!element) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (captureMode === "single") {
+        await exportCapture(element);
+        return;
+      }
+
+      const current = captureSelectionRef.current;
+      const exists = current.includes(element);
+      const next = exists ? current.filter((item) => item !== element) : [...current, element];
+      syncCaptureSelection(next);
+      setMessage(
+        exists
+          ? `已取消选择，当前 ${next.length} 个信息块`
+          : `已加入长图队列：第 ${next.length} 个信息块`
+      );
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        cleanupTarget();
+        clearCaptureSelection();
+        setCaptureMode(null);
+        setMessage("截图模式已退出");
+      }
+    }
+
+    document.body.classList.add("capture-mode");
+    document.addEventListener("pointermove", handlePointerMove, true);
+    document.addEventListener("click", handleClick, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    setMessage(
+      captureMode === "single"
+        ? "截图模式：移动到想保存的信息块，点击后自动导出 PNG，按 Esc 退出"
+        : "长图模式：按顺序点击多个信息块加入长图，再点导出长图"
+    );
+
+    return () => {
+      cleanupTarget();
+      document.body.classList.remove("capture-mode");
+      document.removeEventListener("pointermove", handlePointerMove, true);
+      document.removeEventListener("click", handleClick, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [captureMode, view]);
+
+  async function renderCapture(element: HTMLElement) {
+    return toPng(element, {
+      cacheBust: true,
+      pixelRatio: Math.min(2, window.devicePixelRatio || 1),
+      backgroundColor: "#071015",
+      filter: (node) => !(node instanceof HTMLElement && node.classList.contains("capture-hint"))
+    });
+  }
+
+  function downloadImage(dataUrl: string, name: string) {
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = name;
+    link.click();
+  }
+
+  function loadImage(dataUrl: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("图片加载失败"));
+      image.src = dataUrl;
+    });
+  }
+
+  async function exportCapture(element: HTMLElement) {
+    const name = `${view}-${fileSafeTimestamp()}.png`;
+    setMessage("正在生成截图 PNG");
+    element.classList.remove("capture-hover");
+    element.classList.add("capture-exporting");
+    try {
+      const dataUrl = await renderCapture(element);
+      downloadImage(dataUrl, name);
+      setMessage(`截图已导出：${name}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `截图导出失败：${error.message}` : "截图导出失败");
+    } finally {
+      element.classList.remove("capture-exporting");
+      setCaptureMode(null);
+    }
+  }
+
+  async function exportLongCapture() {
+    const selected = captureSelectionRef.current.filter((element) => document.body.contains(element));
+    if (selected.length === 0) {
+      setMessage("请先在长图模式中选择至少一个信息块");
+      return;
+    }
+
+    const name = `${view}-long-${fileSafeTimestamp()}.png`;
+    setMessage(`正在拼接长图：${selected.length} 个信息块`);
+    setCaptureTarget(null);
+    selected.forEach((element) => {
+      element.classList.remove("capture-hover", "capture-selected");
+      element.removeAttribute("data-capture-order");
+      element.classList.add("capture-exporting");
+    });
+
+    try {
+      const dataUrls = [];
+      for (const element of selected) {
+        dataUrls.push(await renderCapture(element));
+      }
+      const images = await Promise.all(dataUrls.map((dataUrl) => loadImage(dataUrl)));
+      const gap = 18;
+      const padding = 18;
+      const width = Math.max(...images.map((image) => image.width)) + padding * 2;
+      const height = images.reduce((sum, image) => sum + image.height, padding * 2 + gap * (images.length - 1));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("浏览器不支持 Canvas 导出");
+
+      context.fillStyle = "#071015";
+      context.fillRect(0, 0, width, height);
+      let y = padding;
+      for (const image of images) {
+        context.drawImage(image, padding, y);
+        y += image.height + gap;
+      }
+
+      downloadImage(canvas.toDataURL("image/png"), name);
+      setMessage(`长图已导出：${name}`);
+      clearCaptureSelection();
+      setCaptureMode(null);
+    } catch (error) {
+      syncCaptureSelection(selected);
+      setMessage(error instanceof Error ? `长图导出失败：${error.message}` : "长图导出失败");
+    } finally {
+      selected.forEach((element) => element.classList.remove("capture-exporting"));
+    }
+  }
 
   const topResults = useMemo(() => results?.results ?? [], [results]);
   const aiByCode = useMemo(() => {
@@ -271,6 +624,12 @@ function App() {
     if (priorityFilter === "全部") return topResults;
     return topResults.filter((item) => aiByCode.get(item.code)?.ai_priority === priorityFilter);
   }, [aiByCode, priorityFilter, topResults]);
+
+  function openMomentumDetail(item: MomentumWatchItem) {
+    const detailItem = topResults.find((result) => result.code === item.code) ?? detailFromMomentum(item);
+    setSelected(detailItem);
+    setView("detail");
+  }
 
   async function withBusy(
     task: () => Promise<string | void>,
@@ -386,6 +745,34 @@ function App() {
     }, "AI 研究复核已更新", "正在进行 AI 研究复核", "aiAnalysis");
   }
 
+  function handleAddWatchlistItem() {
+    setWatchlist((current) => [...current, createWatchlistItem()]);
+  }
+
+  function handleUpdateWatchlistItem(index: number, patch: Partial<WatchlistItem>) {
+    setWatchlist((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  }
+
+  function handleRemoveWatchlistItem(index: number) {
+    setWatchlist((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  async function handleSaveWatchlist() {
+    await withBusy(async () => {
+      const data = await api.saveWatchlist(watchlist);
+      setWatchlist(data.watchlist);
+      return `自选股已保存：${data.watchlist.length} 只`;
+    }, "自选股已保存", "正在保存自选股池", "watchlistSave");
+  }
+
+  function openWatchlistDetail(item: WatchlistItem) {
+    if (!item.code.trim()) return;
+    const detailItem = topResults.find((result) => result.code === item.code.trim()) ?? detailFromWatchlist(item);
+    setAmbushDetail(null);
+    setSelected(detailItem);
+    setView("detail");
+  }
+
   function handleAddHolding() {
     setHoldings((current) => [...current, createHolding()]);
   }
@@ -456,11 +843,33 @@ function App() {
           {navButton("data", "数据", <Database size={18} />)}
           {navButton("hot", "热点", <Flame size={18} />)}
           {navButton("momentum", "短线", <Activity size={18} />)}
+          {navButton("ambush", "潜伏", <Target size={18} />)}
           {navButton("strategy", "策略", <SlidersHorizontal size={18} />)}
           {navButton("results", "结果", <ListFilter size={18} />)}
+          {navButton("watchlist", "自选", <BadgeCheck size={18} />)}
           {navButton("holdings", "持仓", <Briefcase size={18} />)}
           {navButton("detail", "详情", <Search size={18} />)}
         </nav>
+        <div className="theme-switch">
+          <button
+            className={theme === "jade" ? "theme-btn active" : "theme-btn"}
+            onClick={() => setTheme("jade")}
+            type="button"
+            title="翠晶主题"
+          >
+            <Palette size={16} />
+            <span>翠晶</span>
+          </button>
+          <button
+            className={theme === "amber" ? "theme-btn active" : "theme-btn"}
+            onClick={() => setTheme("amber")}
+            type="button"
+            title="琥珀主题"
+          >
+            <Palette size={16} />
+            <span>琥珀</span>
+          </button>
+        </div>
         <div className="notice">
           <ShieldAlert size={17} />
           <span>仅用于研究观察，不构成投资建议。</span>
@@ -477,13 +886,17 @@ function App() {
                   ? "热点板块"
                   : view === "momentum"
                     ? "短线异动"
-                    : view === "strategy"
-                      ? "策略配置"
-                      : view === "results"
-                        ? "观察名单"
-                        : view === "holdings"
-                          ? "持仓盯盘"
-                          : "个股详情"}
+                    : view === "ambush"
+                      ? "潜伏管道"
+                      : view === "strategy"
+                        ? "策略配置"
+                        : view === "results"
+                          ? "观察名单"
+                          : view === "watchlist"
+                            ? "自选股池"
+                            : view === "holdings"
+                              ? "持仓盯盘"
+                              : "个股详情"}
             </h1>
             <p>{message}</p>
           </div>
@@ -492,8 +905,51 @@ function App() {
             <span>{status?.source ?? "none"}</span>
             <span>{formatNumber(status?.rows ?? 0)} 行</span>
             <span>{formatDate(status?.last_success_at ?? null)}</span>
+            <button
+              className={captureMode === "single" ? "capture-action active" : "capture-action"}
+              type="button"
+              onClick={() => switchCaptureMode("single")}
+              title="点选页面信息块并导出 PNG"
+            >
+              <Download size={16} />
+              <span>{captureMode === "single" ? "退出截图" : "截图"}</span>
+            </button>
+            <button
+              className={captureMode === "long" ? "capture-action active" : "capture-action"}
+              type="button"
+              onClick={() => switchCaptureMode("long")}
+              title="批量选择信息块并拼成长图"
+            >
+              <Layers3 size={16} />
+              <span>{captureMode === "long" ? "退出长图" : "长图"}</span>
+            </button>
           </div>
         </header>
+
+        {captureMode && (
+          <div className="capture-hint">
+            <Download size={16} />
+            <span>
+              {captureMode === "single"
+                ? captureTarget
+                  ? "点击当前高亮区域导出 PNG"
+                  : "移动到要保存的信息块"
+                : captureTarget
+                  ? `点击加入/取消，已选 ${captureSelection.length} 个`
+                  : `长图模式，已选 ${captureSelection.length} 个信息块`}
+            </span>
+            {captureMode === "long" && (
+              <>
+                <button type="button" onClick={clearCaptureSelection} disabled={captureSelection.length === 0}>
+                  清空
+                </button>
+                <button type="button" onClick={exportLongCapture} disabled={captureSelection.length === 0}>
+                  导出长图
+                </button>
+              </>
+            )}
+          </div>
+        )}
 
         {view === "data" && (
           <section className="page-grid">
@@ -564,7 +1020,37 @@ function App() {
 
         {view === "hot" && <HotSectorsView data={hotSectors} />}
 
-        {view === "momentum" && <MomentumWatchView data={momentumWatchlist} />}
+        {view === "momentum" && <MomentumWatchView data={momentumWatchlist} onSelect={openMomentumDetail} />}
+
+        {view === "ambush" && (
+          <AmbushPipelineView
+            pipeline={ambushPipeline}
+            brief={ambushBrief}
+            busy={busy}
+            busyAction={busyAction}
+            onRefresh={async () => {
+              await withBusy(
+                async () => {
+                  const data = await api.runAmbush();
+                  setAmbushPipeline(data);
+                  const briefData = await api.refreshBrief();
+                  setAmbushBrief(briefData);
+                },
+                "潜伏评分已更新",
+                "正在计算潜伏评分",
+                "ambushRun"
+              );
+            }}
+            onSelectDetail={(item) => {
+              setAmbushDetail(item);
+              setView("detail");
+            }}
+            onMarkSeen={async () => {
+              const data = await api.markBriefSeen();
+              setAmbushBrief(data);
+            }}
+          />
+        )}
 
         {view === "strategy" && (
           <section className="strategy-layout">
@@ -735,7 +1221,22 @@ function App() {
           </section>
         )}
 
-        {view === "detail" && (
+        {view === "watchlist" && (
+          <WatchlistView
+            watchlist={watchlist}
+            busy={busy}
+            busyAction={busyAction}
+            onAdd={handleAddWatchlistItem}
+            onChange={handleUpdateWatchlistItem}
+            onOpenDetail={openWatchlistDetail}
+            onRemove={handleRemoveWatchlistItem}
+            onSave={handleSaveWatchlist}
+          />
+        )}
+
+        {view === "detail" && ambushDetail ? (
+          <AmbushDetailView item={ambushDetail} onBack={() => { setAmbushDetail(null); setView("ambush"); }} />
+        ) : view === "detail" && (
           <DetailView item={selected ?? topResults[0] ?? null} aiAnalysis={aiByCode.get((selected ?? topResults[0])?.code ?? "")} />
         )}
 
@@ -754,6 +1255,166 @@ function App() {
         )}
       </main>
     </div>
+  );
+}
+
+function WatchlistView({
+  watchlist,
+  busy,
+  busyAction,
+  onAdd,
+  onChange,
+  onOpenDetail,
+  onRemove,
+  onSave
+}: {
+  watchlist: WatchlistItem[];
+  busy: boolean;
+  busyAction: string | null;
+  onAdd: () => void;
+  onChange: (index: number, patch: Partial<WatchlistItem>) => void;
+  onOpenDetail: (item: WatchlistItem) => void;
+  onRemove: (index: number) => void;
+  onSave: () => void;
+}) {
+  const validCount = watchlist.filter((item) => item.code.trim()).length;
+  const groups = Array.from(new Set(watchlist.map((item) => item.group.trim()).filter(Boolean)));
+  const notedCount = watchlist.filter((item) => item.note.trim()).length;
+
+  return (
+    <section className="holdings-layout">
+      <div className="dashboard-strip holdings-strip">
+        <div className="dashboard-card primary">
+          <div>
+            <span>自选数量</span>
+            <strong>{validCount}</strong>
+          </div>
+          <BadgeCheck size={22} />
+        </div>
+        <div className="dashboard-card">
+          <div>
+            <span>分组数量</span>
+            <strong>{groups.length}</strong>
+          </div>
+          <Layers3 size={22} />
+        </div>
+        <div className="dashboard-card">
+          <div>
+            <span>备注记录</span>
+            <strong>{notedCount}</strong>
+          </div>
+          <ListFilter size={22} />
+        </div>
+        <div className="dashboard-card wide">
+          <div>
+            <span>本地保护</span>
+            <strong>data/watchlist.json</strong>
+          </div>
+          <Save size={22} />
+          <small>自选股单独保存，刷新行情、重新评分、导入 CSV 都不会覆盖。</small>
+        </div>
+      </div>
+
+      <div className="tool-panel holdings-editor">
+        <div className="holding-editor-head">
+          <div className="panel-title">
+            <BadgeCheck size={19} />
+            <h2>自选股池</h2>
+          </div>
+          <div className="action-row compact">
+            <button className="secondary-action" onClick={onAdd} disabled={busy} type="button">
+              <Plus size={18} />
+              新增自选
+            </button>
+            <button
+              className={busyAction === "watchlistSave" ? "primary-action loading" : "primary-action"}
+              onClick={onSave}
+              disabled={busy}
+              type="button"
+            >
+              <Save size={18} />
+              {busyAction === "watchlistSave" ? "保存中" : "保存自选"}
+            </button>
+          </div>
+        </div>
+
+        {watchlist.length === 0 ? (
+          <div className="holding-empty">
+            <BadgeCheck size={28} />
+            <strong>还没有自选股</strong>
+            <span>添加代码和名称后点击保存，之后每次启动都会自动恢复。</span>
+          </div>
+        ) : (
+          <div className="holding-form-grid">
+            <div className="holding-form-header watchlist-form-header">
+              <span>代码</span>
+              <span>名称</span>
+              <span>分组</span>
+              <span>备注</span>
+              <span />
+            </div>
+            {watchlist.map((item, index) => (
+              <div className="holding-row watchlist-row" key={item.id || `watchlist-${index}`}>
+                <label>
+                  <span>代码</span>
+                  <input
+                    value={item.code}
+                    placeholder="600519"
+                    onChange={(event) => onChange(index, { code: event.target.value.trim() })}
+                  />
+                </label>
+                <label>
+                  <span>名称</span>
+                  <input
+                    value={item.name}
+                    placeholder="贵州茅台"
+                    onChange={(event) => onChange(index, { name: event.target.value })}
+                  />
+                </label>
+                <label>
+                  <span>分组</span>
+                  <input
+                    value={item.group}
+                    placeholder="默认"
+                    onChange={(event) => onChange(index, { group: event.target.value })}
+                  />
+                </label>
+                <label>
+                  <span>备注</span>
+                  <input
+                    value={item.note}
+                    placeholder="关注逻辑、题材、触发条件"
+                    onChange={(event) => onChange(index, { note: event.target.value })}
+                  />
+                </label>
+                <div className="watchlist-row-actions">
+                  <button
+                    className="icon-action"
+                    onClick={() => onOpenDetail(item)}
+                    disabled={busy || !item.code.trim()}
+                    type="button"
+                    title="查看详情"
+                    aria-label="查看详情"
+                  >
+                    <Search size={17} />
+                  </button>
+                  <button
+                    className="icon-action danger"
+                    onClick={() => onRemove(index)}
+                    disabled={busy}
+                    type="button"
+                    title="删除自选"
+                    aria-label="删除自选"
+                  >
+                    <Trash2 size={17} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -967,10 +1628,14 @@ function HoldingAnalysisPanel({ analysis }: { analysis: HoldingAnalysisResponse 
 
 function HoldingAnalysisCard({ item }: { item: HoldingAnalysisItem }) {
   const metrics = [
-    ["成本价", formatPrice(item.cost_price)],
-    ["最新参考", formatPrice(item.last_price)],
-    ["持仓市值", formatMoney(item.position_value)],
-    ["浮盈亏", formatMoney(item.unrealized_profit)]
+    { label: "成本价", value: formatPrice(item.cost_price) },
+    {
+      label: "最新行情价",
+      value: formatPrice(item.last_price),
+      hint: item.last_price_source ?? "缺少真实行情价"
+    },
+    { label: "持仓市值", value: formatMoney(item.position_value) },
+    { label: "浮盈亏", value: formatMoney(item.unrealized_profit) }
   ];
 
   return (
@@ -992,10 +1657,13 @@ function HoldingAnalysisCard({ item }: { item: HoldingAnalysisItem }) {
       <p className="analysis-summary">{item.summary}</p>
 
       <div className="holding-metric-grid">
-        {metrics.map(([label, value]) => (
-          <div key={label}>
-            <span>{label}</span>
-            <strong className={label === "浮盈亏" ? profitClass(item.unrealized_profit) : ""}>{value}</strong>
+        {metrics.map((metric) => (
+          <div key={metric.label}>
+            <span>{metric.label}</span>
+            <strong className={metric.label === "浮盈亏" ? profitClass(item.unrealized_profit) : ""}>
+              {metric.value}
+            </strong>
+            {metric.hint ? <small className="holding-metric-source">{metric.hint}</small> : null}
           </div>
         ))}
         <div>
@@ -1228,7 +1896,13 @@ function ResultTable({
   );
 }
 
-function MomentumWatchView({ data }: { data: MomentumWatchResponse | null }) {
+function MomentumWatchView({
+  data,
+  onSelect
+}: {
+  data: MomentumWatchResponse | null;
+  onSelect: (item: MomentumWatchItem) => void;
+}) {
   const items = data?.results ?? [];
   const strongCount = items.filter((item) => item.trigger_level === "强异动").length;
   const avgScore = averageScore(items.map((item) => item.momentum_score));
@@ -1308,7 +1982,7 @@ function MomentumWatchView({ data }: { data: MomentumWatchResponse | null }) {
           </thead>
           <tbody>
             {items.map((item) => (
-              <MomentumRow item={item} key={item.code} />
+              <MomentumRow item={item} key={item.code} onSelect={onSelect} />
             ))}
           </tbody>
         </table>
@@ -1317,10 +1991,19 @@ function MomentumWatchView({ data }: { data: MomentumWatchResponse | null }) {
   );
 }
 
-function MomentumRow({ item }: { item: MomentumWatchItem }) {
+function MomentumRow({ item, onSelect }: { item: MomentumWatchItem; onSelect: (item: MomentumWatchItem) => void }) {
   const labels = fundFlowLabels(item.metrics.fund_flow_source);
   return (
-    <tr>
+    <tr
+      onClick={() => onSelect(item)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect(item);
+        }
+      }}
+      tabIndex={0}
+    >
       <td>
         <strong>#{item.rank}</strong>
         <span>短线观察</span>
@@ -1390,7 +2073,7 @@ function HotSectorsView({ data }: { data: HotSectorResponse | null }) {
         {sectors.map((sector) => {
           const labels = fundFlowLabels(sector.fund_flow_source);
           return (
-            <article className="sector-card" key={sector.sector}>
+            <article className={`sector-card ${heatClass(sector.heat_score)}`} key={sector.sector}>
               <header>
                 <div>
                   <h2>{sector.sector}</h2>
@@ -1480,14 +2163,18 @@ function DetailView({ item, aiAnalysis }: { item: ScreenResult | null; aiAnalysi
   const [levelMessage, setLevelMessage] = useState("正在加载技术参考价位");
   const [analysis, setAnalysis] = useState<TechnicalAnalysisResponse | null>(null);
   const [analysisMessage, setAnalysisMessage] = useState("正在加载技术可能性分析");
+  const [scenario, setScenario] = useState<KlineScenarioResponse | null>(null);
+  const [scenarioMessage, setScenarioMessage] = useState("正在加载K线情景分析");
 
   useEffect(() => {
     if (!item) return;
     let alive = true;
     setLevels(null);
     setAnalysis(null);
+    setScenario(null);
     setLevelMessage("正在加载技术参考价位");
     setAnalysisMessage("正在加载技术可能性分析");
+    setScenarioMessage("正在加载K线情景分析");
     api
       .technicalLevels(item.code)
       .then((data) => {
@@ -1509,6 +2196,17 @@ function DetailView({ item, aiAnalysis }: { item: ScreenResult | null; aiAnalysi
       .catch((error) => {
         if (!alive) return;
         setAnalysisMessage(error instanceof Error ? error.message : "技术可能性分析加载失败");
+      });
+    api
+      .klineScenario(item.code)
+      .then((data) => {
+        if (!alive) return;
+        setScenario(data);
+        setScenarioMessage(data.scenario_bands.length > 0 ? "K线情景分析已更新" : "暂无足够历史样本");
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setScenarioMessage(error instanceof Error ? error.message : "K线情景分析加载失败");
       });
     return () => {
       alive = false;
@@ -1640,6 +2338,8 @@ function DetailView({ item, aiAnalysis }: { item: ScreenResult | null; aiAnalysi
       <TechnicalLevelsPanel levels={levels} message={levelMessage} />
 
       <TechnicalAnalysisPanel analysis={analysis} message={analysisMessage} />
+
+      <KlineScenarioPanel scenario={scenario} message={scenarioMessage} />
 
       <AiResearchPanel analysis={aiAnalysis ?? null} />
 
@@ -1811,6 +2511,117 @@ function TechnicalAnalysisPanel({
   );
 }
 
+function KlineScenarioPanel({
+  scenario,
+  message
+}: {
+  scenario: KlineScenarioResponse | null;
+  message: string;
+}) {
+  return (
+    <div className="tool-panel scenario-panel">
+      <div className="panel-title">
+        <Layers3 size={19} />
+        <h2>K线情景分析</h2>
+      </div>
+      {!scenario ? (
+        <div className="inline-state">{message}</div>
+      ) : (
+        <>
+          <div className="level-summary scenario-summary">
+            <div>
+              <span>最新收盘参考</span>
+              <strong>{formatPrice(scenario.last_close)}</strong>
+            </div>
+            <div>
+              <span>交易日</span>
+              <strong>{scenario.trade_date ?? "-"}</strong>
+            </div>
+            <div>
+              <span>样本窗口</span>
+              <strong>{scenario.lookback_days}日</strong>
+            </div>
+          </div>
+
+          <p className="analysis-summary">{scenario.summary}</p>
+
+          <div className="scenario-context-grid">
+            <div>
+              <span>趋势语境</span>
+              <strong>{scenario.trend_context}</strong>
+            </div>
+            <div>
+              <span>波动状态</span>
+              <strong>{scenario.volatility_state}</strong>
+            </div>
+            <div>
+              <span>区间位置</span>
+              <strong>{scenario.range_state}</strong>
+            </div>
+            <div>
+              <span>量能状态</span>
+              <strong>{scenario.volume_state}</strong>
+            </div>
+          </div>
+
+          <div className="scenario-band-grid">
+            {scenario.scenario_bands.map((band) => (
+              <div key={band.horizon_days}>
+                <div className="scenario-band-head">
+                  <strong>{band.label}</strong>
+                  <span>{band.probability_note}</span>
+                </div>
+                <div className="scenario-prices">
+                  <div>
+                    <span>上沿情景</span>
+                    <strong>{formatPrice(band.upside_price)}</strong>
+                    <em>{formatSignedPercent(band.upside_return_pct)}</em>
+                  </div>
+                  <div>
+                    <span>中性情景</span>
+                    <strong>{formatPrice(band.base_price)}</strong>
+                    <em>{formatSignedPercent(band.base_return_pct)}</em>
+                  </div>
+                  <div>
+                    <span>回撤情景</span>
+                    <strong>{formatPrice(band.downside_price)}</strong>
+                    <em>{formatSignedPercent(band.downside_return_pct)}</em>
+                  </div>
+                </div>
+                <p>{band.basis}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="analysis-columns">
+            <div>
+              <h3>序列信号</h3>
+              <div className="signal-list">
+                {scenario.sequence_signals.map((signal) => (
+                  <div className={directionClass(signal.direction)} key={`${signal.label}-${signal.value}`}>
+                    <span>{signal.label}</span>
+                    <strong>{signal.value}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h3>数据缺口</h3>
+              <ul className="text-list risk compact-list">
+                {(scenario.data_gaps.length > 0 ? scenario.data_gaps : ["暂无明显缺口"]).map((gap) => (
+                  <li key={gap}>{gap}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <p className="research-note">{scenario.research_only_note}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function LevelMiniList({ title, levels }: { title: string; levels: TechnicalLevelsResponse["levels"] }) {
   return (
     <div>
@@ -1889,6 +2700,614 @@ function TechnicalLevelsPanel({
         {(!levels || levels.levels.length === 0) && <div className="inline-state">{message}</div>}
       </div>
     </div>
+  );
+}
+
+function BriefPanel({
+  brief,
+  onMarkSeen,
+  onRefreshBrief
+}: {
+  brief: AmbushBrief | null;
+  onMarkSeen: () => void;
+  onRefreshBrief: () => void;
+}) {
+  const [collapsed, setCollapsed] = useState(!brief?.has_unseen);
+  // 简报内容变化时自动展开/折叠
+  useEffect(() => {
+    setCollapsed(!brief?.has_unseen);
+  }, [brief?.has_unseen]);
+
+  if (!brief || !brief.has_unseen) {
+    if (!brief) {
+      return (
+        <div className="ambush-brief ambush-brief-empty">
+          <span>尚未生成每日简报</span>
+          <button className="brief-refresh" onClick={onRefreshBrief} type="button">
+            <RefreshCw size={14} />
+            计算简报
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="ambush-brief ambush-brief-seen">
+        <span>今日简报已查阅</span>
+        <button className="brief-refresh" onClick={() => setCollapsed(!collapsed)} type="button">
+          {collapsed ? "展开查看" : "收起"}
+        </button>
+        <button className="brief-refresh" onClick={onRefreshBrief} type="button">
+          <RefreshCw size={14} />
+          刷新
+        </button>
+      </div>
+    );
+  }
+
+  const hasItems = brief.new_items_count + brief.promoted_count + brief.expired_count > 0;
+  const totalTop = brief.top_ignition.length + brief.top_brewing.length;
+
+  return (
+    <div className="ambush-brief">
+      <div className="ambush-brief-head" onClick={() => setCollapsed(!collapsed)}>
+        <div className="ambush-brief-title">
+          <span className="brief-icon">📊</span>
+          <h3>每日简报</h3>
+          {brief.has_unseen && <span className="brief-unseen-dot" />}
+        </div>
+        <div className="ambush-brief-counts">
+          {brief.new_items_count > 0 && (
+            <span className="brief-count new">{brief.new_items_count} 只新发现</span>
+          )}
+          {brief.promoted_count > 0 && (
+            <span className="brief-count promoted">{brief.promoted_count} 只晋升</span>
+          )}
+          {brief.expired_count > 0 && (
+            <span className="brief-count expired">{brief.expired_count} 只失效</span>
+          )}
+          {!hasItems && <span className="brief-count steady">无变化</span>}
+        </div>
+        <div className="ambush-brief-actions">
+          <button
+            className="brief-mark-seen"
+            onClick={(e) => { e.stopPropagation(); onMarkSeen(); }}
+            type="button"
+            title="标记为已读"
+          >
+            ✓ 已阅
+          </button>
+          <span className="brief-collapse-icon">{collapsed ? "▼" : "▲"}</span>
+        </div>
+      </div>
+
+      {!collapsed && (
+        <div className="ambush-brief-body">
+          {/* 新发现 */}
+          {brief.new_items.length > 0 && (
+            <div className="brief-section">
+              <h4>
+                <span className="brief-section-icon new" />
+                新发现
+                <small>{brief.new_items.length} 只</small>
+              </h4>
+              <div className="brief-cards">
+                {brief.new_items.map((item) => (
+                  <BriefCard item={item} key={`new-${item.code}`} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 晋升 */}
+          {brief.promoted_items.length > 0 && (
+            <div className="brief-section">
+              <h4>
+                <span className="brief-section-icon promoted" />
+                阶段晋升
+                <small>{brief.promoted_items.length} 只</small>
+              </h4>
+              <div className="brief-cards">
+                {brief.promoted_items.map((item) => (
+                  <BriefCard item={item} key={`promoted-${item.code}`} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 阶段亮点 */}
+          {(brief.top_ignition.length > 0 || brief.top_brewing.length > 0) && (
+            <div className="brief-section">
+              <h4>
+                <span className="brief-section-icon highlight" />
+                阶段亮点
+                <small>各阶段评分最高</small>
+              </h4>
+              <div className="brief-cards">
+                {brief.top_ignition.map((item) => (
+                  <BriefCard item={item} key={`top-ig-${item.code}`} highlight />
+                ))}
+                {brief.top_brewing.map((item) => (
+                  <BriefCard item={item} key={`top-br-${item.code}`} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 失效 */}
+          {brief.expired_items.length > 0 && (
+            <div className="brief-section">
+              <h4>
+                <span className="brief-section-icon expired" />
+                已失效
+                <small>{brief.expired_items.length} 只</small>
+              </h4>
+              <div className="brief-cards">
+                {brief.expired_items.map((item) => (
+                  <BriefCard item={item} key={`expired-${item.code}`} dimmed />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!hasItems && !totalTop && (
+            <div className="brief-empty-state">
+              <span>管道数据已就绪，暂无阶段性变化</span>
+              <span className="brief-empty-hint">运行刷新后会自动对比生成新发现</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BriefCard({ item, highlight, dimmed }: { item: AmbushBriefItem; highlight?: boolean; dimmed?: boolean }) {
+  const stageLabel =
+    item.change === "new" ? "新发现" :
+    item.change === "promoted" ? "已晋升" :
+    item.change === "expired" ? "已失效" :
+    item.stage;
+
+  return (
+    <div className={"brief-card" + (highlight ? " highlight" : "") + (dimmed ? " dimmed" : "")}>
+      <div className="brief-card-head">
+        <strong>{item.name}</strong>
+        <span className="brief-card-code">{item.code}</span>
+        <span className={"brief-card-stage " + item.change}>{stageLabel}</span>
+      </div>
+      <div className="brief-card-body">
+        <span className="brief-card-score">{item.total_score.toFixed(1)}</span>
+        <span className="brief-card-sector">{item.sector}</span>
+      </div>
+      {item.detail && <div className="brief-card-detail">{item.detail}</div>}
+    </div>
+  );
+}
+
+function AmbushPipelineView({
+  pipeline,
+  brief,
+  busy,
+  busyAction,
+  onRefresh,
+  onSelectDetail,
+  onMarkSeen
+}: {
+  pipeline: AmbushPipelineResponse | null;
+  brief: AmbushBrief | null;
+  busy: boolean;
+  busyAction: string | null;
+  onRefresh: () => void;
+  onSelectDetail: (item: AmbushItem) => void;
+  onMarkSeen: () => void;
+}) {
+  const watchPool = pipeline?.watch_pool ?? [];
+  const brewingPool = pipeline?.brewing_pool ?? [];
+  const ignitionPool = pipeline?.ignition_pool ?? [];
+  const total = watchPool.length + brewingPool.length + ignitionPool.length;
+
+  function stageBadge(stage: string) {
+    return <span className={`ambush-stage ${stage === "待点火" ? "ignition" : stage === "蓄势中" ? "brewing" : "watch"}`}>{stage}</span>;
+  }
+
+  function signalMini(signals: AmbushSignalDetail[]) {
+    return signals.slice(0, 3).map((sig) => (
+      <span key={sig.signal_key} className="ambush-signal-pill" title={sig.details}>
+        {sig.signal_name} {sig.confidence.toFixed(0)}
+      </span>
+    ));
+  }
+
+  function scoreColor(s: number) {
+    if (s >= 70) return 'var(--accent)';
+    if (s >= 50) return 'var(--amber)';
+    return 'var(--red)';
+  }
+
+  function renderCard(item: AmbushItem) {
+    const comps = [
+      { label: '结构', score: item.structure_score, color: 'var(--blue)' },
+      { label: '质地', score: item.quality_score, color: 'var(--violet)' },
+      { label: '题材', score: item.thematic_score, color: 'var(--amber)' },
+    ];
+    const topSignals = item.signals.slice(0, 4);
+    return (
+      <article
+        className="ambush-card"
+        key={item.code}
+        onClick={() => onSelectDetail(item)}
+      >
+        <header className="ambush-card-head">
+          <div>
+            <strong>{item.name}</strong>
+            <span>{item.code}</span>
+          </div>
+          <div className="ambush-score-ring">
+            <svg viewBox="0 0 36 36" width="36" height="36">
+              <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(var(--lr), var(--lg), var(--lb), 0.1)" strokeWidth="3" />
+              <circle
+                cx="18" cy="18" r="15.9"
+                fill="none"
+                stroke={scoreColor(item.total_score)}
+                strokeWidth="3"
+                strokeDasharray={`${item.total_score * 1.0} 100`}
+                strokeLinecap="round"
+                transform="rotate(-90 18 18)"
+              />
+            </svg>
+            <span>{item.total_score.toFixed(0)}</span>
+          </div>
+        </header>
+        <div className="ambush-card-body">
+          <div className="ambush-card-meta">
+            <span>{item.sector}</span>
+            {stageBadge(item.stage)}
+          </div>
+
+          {/* 评分分量条形图 */}
+          <div className="ambush-score-comps">
+            {comps.map(c => (
+              <div className="ambush-score-comp" key={c.label}>
+                <span className="ambush-comp-label">{c.label}</span>
+                <div className="ambush-comp-track">
+                  <div className="ambush-comp-fill" style={{ width: `${c.score}%`, background: c.color }} />
+                </div>
+                <span className="ambush-comp-value" style={{ color: c.score >= 70 ? c.color : undefined }}>
+                  {c.score.toFixed(0)}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* 信号置信度条 */}
+          <div className="ambush-signal-strip">
+            {topSignals.length > 0 ? topSignals.map(s => (
+              <div className="ambush-signal-bar" key={s.signal_key}>
+                <div className="ambush-signal-bar-track">
+                  <div
+                    className="ambush-signal-bar-fill"
+                    style={{ width: `${s.confidence}%` }}
+                  />
+                </div>
+                <span className="ambush-signal-bar-label" title={s.details}>{s.signal_name}</span>
+                <span className="ambush-signal-bar-val">{s.confidence.toFixed(0)}</span>
+              </div>
+            )) : (
+              <span className="ambush-signal-pill muted">暂无信号</span>
+            )}
+          </div>
+
+          {item.conditions.length > 0 && (
+            <div className="ambush-condition-line">
+              <Target size={12} />
+              <span>{item.conditions[0].condition}</span>
+            </div>
+          )}
+        </div>
+      </article>
+    );
+  }
+
+  return (
+    <section className="ambush-layout">
+      <div className="dashboard-strip">
+        <div className="dashboard-card primary">
+          <div>
+            <span>管道总数</span>
+            <strong>{total}</strong>
+          </div>
+          <Target size={22} />
+        </div>
+        <div className="dashboard-card">
+          <div>
+            <span>观察池</span>
+            <strong>{watchPool.length}</strong>
+          </div>
+          <Flame size={22} />
+        </div>
+        <div className="dashboard-card">
+          <div>
+            <span>蓄势中</span>
+            <strong>{brewingPool.length}</strong>
+          </div>
+          <BarChart3 size={22} />
+        </div>
+        <div className="dashboard-card">
+          <div>
+            <span>待点火</span>
+            <strong>{ignitionPool.length}</strong>
+          </div>
+          <Activity size={22} />
+          <small>{pipeline?.new_today ?? 0} 只新发现</small>
+        </div>
+        <div className="dashboard-card wide">
+          <div>
+            <span>操作建议</span>
+            <strong>待点火区每日必看</strong>
+          </div>
+          <Target size={22} />
+          <small>出现确认信号即可进入研究</small>
+        </div>
+      </div>
+
+      {/* 每日简报 */}
+      <BriefPanel
+        brief={brief}
+        onMarkSeen={onMarkSeen}
+        onRefreshBrief={onRefresh}
+      />
+
+      <div className="table-toolbar">
+        <div>
+          <strong>{ignitionPool.length}</strong><span> 只待点火，</span>
+          <strong>{brewingPool.length}</strong><span> 只蓄势中，</span>
+          <strong>{watchPool.length}</strong><span> 只观察池</span>
+        </div>
+        <div className="action-row compact">
+          <button
+            className={busyAction === "ambushRun" ? "secondary-action loading" : "secondary-action"}
+            onClick={onRefresh}
+            disabled={busy}
+            type="button"
+          >
+            <RefreshCw size={18} />
+            {busyAction === "ambushRun" ? "评分中" : "刷新潜伏评分"}
+          </button>
+        </div>
+      </div>
+
+      <div className="ambush-kanban">
+        <div className="ambush-column">
+          <div className="ambush-column-head">
+            <h3>观察池</h3>
+            <span>{watchPool.length}</span>
+          </div>
+          <div className="ambush-column-body">
+            {watchPool.map(renderCard)}
+            {watchPool.length === 0 && <div className="ambush-empty">暂无符合条件的股票</div>}
+          </div>
+        </div>
+        <div className="ambush-column">
+          <div className="ambush-column-head brewing">
+            <h3>蓄势中</h3>
+            <span>{brewingPool.length}</span>
+          </div>
+          <div className="ambush-column-body">
+            {brewingPool.map(renderCard)}
+            {brewingPool.length === 0 && <div className="ambush-empty">暂无蓄势完成的股票</div>}
+          </div>
+        </div>
+        <div className="ambush-column">
+          <div className="ambush-column-head ignition">
+            <h3>待点火</h3>
+            <span>{ignitionPool.length}</span>
+          </div>
+          <div className="ambush-column-body">
+            {ignitionPool.map(renderCard)}
+            {ignitionPool.length === 0 && <div className="ambush-empty">暂无待点火股票</div>}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AmbushDetailView({
+  item,
+  onBack
+}: {
+  item: AmbushItem;
+  onBack: () => void;
+}) {
+  const [techLevels, setTechLevels] = useState<TechnicalLevelsResponse | null>(null);
+  const [klineScenario, setKlineScenario] = useState<KlineScenarioResponse | null>(null);
+
+  useEffect(() => {
+    api.technicalLevels(item.code).then(setTechLevels).catch(() => null);
+    api.klineScenario(item.code).then(setKlineScenario).catch(() => null);
+  }, [item.code]);
+
+  return (
+    <section className="ambush-detail-layout">
+      <div className="tool-panel ambush-detail-head">
+        <div className="ambush-detail-head-left">
+          <button className="icon-action" onClick={onBack} type="button" title="返回潜伏管道">
+            ← 返回
+          </button>
+          <h2>
+            {item.name}
+            <span>{item.code}</span>
+          </h2>
+          <span className={`ambush-stage ${item.stage === "待点火" ? "ignition" : item.stage === "蓄势中" ? "brewing" : "watch"}`}>
+            {item.stage}
+          </span>
+        </div>
+        <div className="ambush-score-ring large">
+          <svg viewBox="0 0 48 48" width="48" height="48">
+            <circle cx="24" cy="24" r="21.5" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3" />
+            <circle
+              cx="24" cy="24" r="21.5"
+              fill="none"
+              stroke={item.total_score >= 70 ? "#38f0b0" : item.total_score >= 55 ? "#ffc24a" : "#ff6d5f"}
+              strokeWidth="3"
+              strokeDasharray={`${item.total_score * 0.96} 100`}
+              strokeLinecap="round"
+              transform="rotate(-90 24 24)"
+            />
+          </svg>
+          <span>{item.total_score.toFixed(0)}</span>
+        </div>
+      </div>
+
+      <div className="ambush-detail-grid">
+        <div className="tool-panel">
+          <div className="panel-title">
+            <Activity size={19} />
+            <h2>K线结构评分</h2>
+            <strong>{item.structure_score.toFixed(0)}</strong>
+          </div>
+          <div className="ambush-signal-list">
+            {item.signals.filter((s) => s.group === "蓄势组").map((sig) => (
+              <div className="ambush-signal-row" key={sig.signal_key}>
+                <div>
+                  <strong>{sig.signal_name}</strong>
+                  <p>{sig.details}</p>
+                </div>
+                <div className="ambush-signal-confidence">
+                  <div className={`score-bar ${sig.confidence >= 65 ? "strong" : sig.confidence >= 40 ? "steady" : "weak"}`}>
+                    <i style={{ width: `${sig.confidence}%` }} />
+                  </div>
+                  <span>{sig.confidence.toFixed(0)}</span>
+                </div>
+              </div>
+            ))}
+            {item.signals.filter((s) => s.group === "蓄势组").length === 0 && (
+              <div className="ambush-empty">暂无蓄势信号</div>
+            )}
+          </div>
+        </div>
+
+        <div className="tool-panel">
+          <div className="panel-title">
+            <Activity size={19} />
+            <h2>资金暗涌</h2>
+            <strong>{item.signals.filter((s) => s.group === "吸筹组").reduce((max, s) => Math.max(max, s.confidence), 0).toFixed(0)}</strong>
+          </div>
+          <div className="ambush-signal-list">
+            {item.signals.filter((s) => s.group === "吸筹组").map((sig) => (
+              <div className="ambush-signal-row" key={sig.signal_key}>
+                <div>
+                  <strong>{sig.signal_name}</strong>
+                  <p>{sig.details}</p>
+                </div>
+                <div className="ambush-signal-confidence">
+                  <div className={`score-bar ${sig.confidence >= 65 ? "strong" : sig.confidence >= 40 ? "steady" : "weak"}`}>
+                    <i style={{ width: `${sig.confidence}%` }} />
+                  </div>
+                  <span>{sig.confidence.toFixed(0)}</span>
+                </div>
+              </div>
+            ))}
+            {item.signals.filter((s) => s.group === "吸筹组").length === 0 && (
+              <div className="ambush-empty">暂无资金暗涌信号</div>
+            )}
+          </div>
+        </div>
+
+        <div className="tool-panel">
+          <div className="panel-title">
+            <BarChart3 size={19} />
+            <h2>题材匹配</h2>
+            <strong>{item.thematic.score.toFixed(0)}</strong>
+          </div>
+          <div className="ambush-thematic-grid">
+            <div>
+              <span>概念数量</span>
+              <strong>{item.thematic.concept_count}</strong>
+            </div>
+            <div>
+              <span>热点命中</span>
+              <strong>{item.thematic.hot_concept_hits}</strong>
+            </div>
+            <div>
+              <span>板块相关度</span>
+              <strong>{item.thematic.sector_relevance.toFixed(0)}</strong>
+            </div>
+            <div className="ambush-thematic-concepts">
+              <span>匹配概念</span>
+              <div>
+                {item.thematic.matched_concepts.map((c) => (
+                  <span className="ambush-concept-tag" key={c}>{c}</span>
+                ))}
+                {item.thematic.matched_concepts.length === 0 && <span className="muted">未命中热点</span>}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="tool-panel">
+          <div className="panel-title">
+            <BadgeCheck size={19} />
+            <h2>基本面安全垫</h2>
+            <strong>{item.quality_score.toFixed(0)}</strong>
+          </div>
+          <div className="ambush-score-bar-large">
+            <div className={`score-bar ${item.quality_score >= 65 ? "strong" : item.quality_score >= 45 ? "steady" : "weak"}`}>
+              <i style={{ width: `${item.quality_score}%` }} />
+            </div>
+          </div>
+          <div className="ambush-score-legend">
+            <span>基于ROE、营收增长、PE、现金流比</span>
+          </div>
+        </div>
+      </div>
+
+      {item.conditions.length > 0 && (
+        <div className="tool-panel">
+          <div className="panel-title">
+            <Target size={19} />
+            <h2>确认买入条件</h2>
+          </div>
+          <div className="ambush-condition-grid">
+            {item.conditions.map((cond, i) => (
+              <div className="ambush-condition-card" key={i}>
+                <div className="ambush-condition-header">
+                  <span>条件 #{i + 1}</span>
+                  <strong>{cond.condition}</strong>
+                </div>
+                <div className="ambush-condition-meta">
+                  {cond.trigger_price && (
+                    <div>
+                      <span>触发价</span>
+                      <strong>{formatPrice(cond.trigger_price)}</strong>
+                    </div>
+                  )}
+                  <div>
+                    <span>依据</span>
+                    <strong>{cond.price_basis}</strong>
+                  </div>
+                </div>
+                <div className="ambush-condition-rules">
+                  <div>
+                    <Flame size={14} />
+                    <span>{cond.stop_loss}</span>
+                  </div>
+                  <div>
+                    <TrendingUp size={14} />
+                    <span>{cond.target}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="ambush-detail-technical">
+        <TechnicalLevelsPanel levels={techLevels} message="加载技术价位中..." />
+        <KlineScenarioPanel scenario={klineScenario} message="加载K线情景中..." />
+      </div>
+    </section>
   );
 }
 

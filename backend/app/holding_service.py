@@ -18,11 +18,23 @@ from .models import (
     TechnicalAnalysisResponse,
 )
 from .scoring import run_screen
-from .storage import load_config, utc_now_iso
+from .storage import load_config, load_status, utc_now_iso
 from .technical import calculate_technical_analysis, normalize_stock_code
 
 
 ALLOWED_HOLDING_PRIORITIES = {"增强跟踪", "继续观察", "降低暴露", "等待数据"}
+FACTUAL_HOLDING_FIELDS = {
+    "code",
+    "name",
+    "holding_period",
+    "cost_price",
+    "quantity",
+    "last_price",
+    "last_price_source",
+    "position_value",
+    "unrealized_profit",
+    "unrealized_profit_pct",
+}
 
 
 def normalize_holding(item: HoldingItem) -> HoldingItem:
@@ -39,6 +51,23 @@ def _safe_float(value: Any, default: float = 0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _market_price(row: dict[str, Any]) -> float | None:
+    price = _safe_float(row.get("current_price"), float("nan"))
+    return round(price, 3) if pd.notna(price) and price > 0 else None
+
+
+def _market_price_source(row: dict[str, Any]) -> str | None:
+    if _market_price(row) is None:
+        return None
+    try:
+        source = load_status().source
+    except Exception:
+        source = ""
+    if source and source != "none":
+        return f"{source} 行情 current_price 字段"
+    return "本地股票池 current_price 字段"
 
 
 def _stock_row(code: str) -> dict[str, Any]:
@@ -69,16 +98,12 @@ def _technical_context(code: str, name: str) -> TechnicalAnalysisResponse | None
 def _nearest_support(technical: TechnicalAnalysisResponse | None, current_price: float | None) -> float | None:
     if technical and technical.support_levels:
         return technical.support_levels[0].price
-    if current_price:
-        return round(current_price * 0.94, 2)
     return None
 
 
 def _nearest_resistance(technical: TechnicalAnalysisResponse | None, current_price: float | None) -> float | None:
     if technical and technical.resistance_levels:
         return technical.resistance_levels[0].price
-    if current_price:
-        return round(current_price * 1.08, 2)
     return None
 
 
@@ -92,6 +117,8 @@ def _price_zone(price: float | None, pct: float = 0.012) -> str:
 
 def _holding_data_gaps(row: dict[str, Any], technical: TechnicalAnalysisResponse | None) -> list[str]:
     gaps: list[str] = []
+    if _market_price(row) is None:
+        gaps.append("最新行情价")
     for key, label in {
         "pe": "PE",
         "pb": "PB",
@@ -113,7 +140,8 @@ def _local_holding_analysis(holding: HoldingItem, screen_result: Any | None = No
     row = _stock_row(holding.code)
     name = holding.name or str(row.get("name") or holding.code)
     technical = _technical_context(holding.code, name)
-    last_price = technical.last_close if technical and technical.last_close else None
+    last_price = _market_price(row)
+    last_price_source = _market_price_source(row)
     quantity = max(0, _safe_float(holding.quantity))
     cost_price = max(0.01, _safe_float(holding.cost_price))
     position_value = round(last_price * quantity, 2) if last_price is not None and quantity > 0 else None
@@ -128,7 +156,7 @@ def _local_holding_analysis(holding: HoldingItem, screen_result: Any | None = No
     quality_score = screen_result.score.quality if screen_result else 50
     sector_heat = screen_result.score.sector_heat if screen_result else 50
     fund_score = _safe_float(row.get("fund_validation_score"), 50)
-    profit_pct = unrealized_profit_pct or 0
+    profit_pct = unrealized_profit_pct
 
     if holding.holding_period == "short":
         if trend_score >= 65 and downside < 30:
@@ -148,7 +176,8 @@ def _local_holding_analysis(holding: HoldingItem, screen_result: Any | None = No
         short_view = technical.summary if technical else "暂无足够技术数据，短线只做观察。"
         long_view = "短线持仓暂不以 2-10 年逻辑决策，仍需看长期质量和估值是否匹配。"
     else:
-        long_score = quality_score * 0.35 + valuation_score * 0.25 + sector_heat * 0.15 + fund_score * 0.10 + max(0, 100 - max(0, profit_pct)) * 0.15
+        profit_control_score = 50 if profit_pct is None else max(0, 100 - max(0, profit_pct))
+        long_score = quality_score * 0.35 + valuation_score * 0.25 + sector_heat * 0.15 + fund_score * 0.10 + profit_control_score * 0.15
         if long_score >= 68 and valuation_score >= 45:
             priority = "增强跟踪"
         elif valuation_score < 35 or quality_score < 35:
@@ -168,6 +197,8 @@ def _local_holding_analysis(holding: HoldingItem, screen_result: Any | None = No
             f"长期复核分位：质量 {quality_score:.1f}、估值纪律 {valuation_score:.1f}、板块热度 {sector_heat:.1f}。"
             "适合继续跟踪基本面兑现与估值是否匹配。"
         )
+    if last_price is None:
+        priority = "等待数据"
 
     plan_levels = [
         HoldingPlanLevel(
@@ -194,10 +225,12 @@ def _local_holding_analysis(holding: HoldingItem, screen_result: Any | None = No
     ]
 
     risk_flags = []
-    if profit_pct >= 25:
+    if profit_pct is not None and profit_pct >= 25:
         risk_flags.append("已有较高浮盈，需防止盈利回撤吞噬计划收益。")
-    if profit_pct <= -12:
+    if profit_pct is not None and profit_pct <= -12:
         risk_flags.append("浮亏较明显，需确认原持仓逻辑是否被破坏。")
+    if last_price is None:
+        risk_flags.append("缺少最新行情价，暂不计算浮盈亏和持仓市值。")
     if valuation_score < 45:
         risk_flags.append("估值纪律偏弱，不宜只因下跌而机械加仓。")
     if fund_score < 45:
@@ -207,10 +240,19 @@ def _local_holding_analysis(holding: HoldingItem, screen_result: Any | None = No
 
     confidence_base = 42 + (trend_score - 50) * 0.15 + (valuation_score - 50) * 0.12 + (quality_score - 50) * 0.1
     confidence = max(20, min(88, confidence_base + max(0, 6 - len(_holding_data_gaps(row, technical))) * 4))
-    summary = (
-        f"{name}当前浮盈亏 {profit_pct:.2f}%，周期为{'短线30天内' if holding.holding_period == 'short' else '长线2-10年'}。"
-        f"当前归为“{priority}”，核心看支撑/压力、估值纪律和原持仓理由是否继续成立。"
-    )
+    if last_price is None:
+        confidence = min(confidence, 52)
+    period_text = "短线30天内" if holding.holding_period == "short" else "长线2-10年"
+    if profit_pct is None:
+        summary = (
+            f"{name}缺少最新行情价，暂不计算浮盈亏，周期为{period_text}。"
+            f"当前归为“{priority}”，需先补齐真实行情价，再复核支撑/压力、估值纪律和原持仓理由。"
+        )
+    else:
+        summary = (
+            f"{name}当前浮盈亏 {profit_pct:.2f}%，周期为{period_text}。"
+            f"当前归为“{priority}”，核心看支撑/压力、估值纪律和原持仓理由是否继续成立。"
+        )
 
     return HoldingAnalysisItem(
         id=holding.id,
@@ -220,6 +262,7 @@ def _local_holding_analysis(holding: HoldingItem, screen_result: Any | None = No
         cost_price=cost_price,
         quantity=quantity,
         last_price=last_price,
+        last_price_source=last_price_source,
         position_value=position_value,
         unrealized_profit=unrealized_profit,
         unrealized_profit_pct=unrealized_profit_pct,
@@ -243,8 +286,11 @@ def _holding_prompt(payload: list[dict[str, Any]]) -> str:
 1. 不得输出“必须买入/卖出/加仓/减仓”、不得给仓位比例、不得承诺收益。
 2. 可以输出条件化观察区：加仓观察区、获利减仓观察区、风险复核位、继续持有条件。
 3. 短线周期只讨论 30 天内技术结构和风险；长线周期只讨论 2-10 年质量、估值、分红和回撤管理。
-4. 价格只能使用输入中的 cost_price、last_price、technical/support/resistance 或 local_baseline.plan_levels，不得编造新闻和财报。
-5. 输出必须是严格 JSON，不要 Markdown。
+4. last_price/current_price 只代表输入中的真实行情价；如果为 null，必须写入 data_gaps，不得用 technical.last_close、支撑压力或估算值替代市价/浮盈亏。
+5. technical.kline_last_close_reference 只是 K 线收盘参考，可用于技术结构语境，不能当作当前市价。
+6. local_baseline.plan_levels 的价格、区间、理由和条件由本地规则生成，不要改写；如需补充，只能写入 action_points 或 risk_flags。
+7. 价格只能使用输入中的 cost_price、last_price/current_price、technical/support/resistance 或 local_baseline.plan_levels，不得编造新闻和财报。
+8. 输出必须是严格 JSON，不要 Markdown。
 
 输出格式：
 {{
@@ -282,6 +328,8 @@ def _holding_payload(holding: HoldingItem, fallback: HoldingAnalysisItem, screen
         "market": {
             "name": fallback.name,
             "last_price": fallback.last_price,
+            "current_price": fallback.last_price,
+            "current_price_source": fallback.last_price_source,
             "sector": row.get("sector"),
             "industry": row.get("industry"),
             "pct_change": row.get("pct_change"),
@@ -310,6 +358,9 @@ def _holding_payload(holding: HoldingItem, fallback: HoldingAnalysisItem, screen
         if technical is None
         else {
             "trend_label": technical.trend_label,
+            "kline_last_close_reference": technical.last_close,
+            "kline_trade_date": technical.trade_date,
+            "kline_price_note": "K 线最后收盘价不是当前行情价，不可用于市价或浮盈亏计算。",
             "trend_score": technical.trend_score,
             "upside_probability": technical.upside_probability,
             "downside_probability": technical.downside_probability,
@@ -318,7 +369,20 @@ def _holding_payload(holding: HoldingItem, fallback: HoldingAnalysisItem, screen
             "patterns": [pattern.model_dump(mode="json") for pattern in technical.patterns[:3]],
         },
         "local_baseline": fallback.model_dump(mode="json"),
-    }
+}
+
+
+def _merge_unique_gaps(fallback: HoldingAnalysisItem, raw_gaps: Any) -> list[str]:
+    merged: list[str] = []
+    for gap in fallback.data_gaps:
+        if gap and gap not in merged:
+            merged.append(gap)
+    if isinstance(raw_gaps, list):
+        for gap in raw_gaps:
+            text = str(gap).strip()
+            if text and text not in merged:
+                merged.append(text)
+    return merged[:10]
 
 
 def _merge_ai_holding(raw: dict[str, Any], fallbacks: dict[str, HoldingAnalysisItem]) -> list[HoldingAnalysisItem]:
@@ -334,6 +398,10 @@ def _merge_ai_holding(raw: dict[str, Any], fallbacks: dict[str, HoldingAnalysisI
         if fallback is None:
             continue
         merged = {**fallback.model_dump(mode="json"), **item, "id": holding_id}
+        for field in FACTUAL_HOLDING_FIELDS:
+            merged[field] = getattr(fallback, field)
+        merged["data_gaps"] = _merge_unique_gaps(fallback, item.get("data_gaps"))
+        merged["plan_levels"] = [level.model_dump(mode="json") for level in fallback.plan_levels]
         if merged.get("priority") not in ALLOWED_HOLDING_PRIORITIES:
             merged["priority"] = fallback.priority
         try:

@@ -7,14 +7,28 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-from .models import AiAnalysisResponse, AppConfig, DataStatus, HoldingAnalysisResponse, HoldingListResponse, ScreenResponse
+from .models import (
+    AiAnalysisResponse,
+    AmbushBrief,
+    AppConfig,
+    DataStatus,
+    HoldingAnalysisResponse,
+    HoldingListResponse,
+    ScreenResponse,
+    WatchlistResponse,
+)
 from .paths import (
     AI_ANALYSIS_PATH,
+    AMBUSH_BRIEF_PATH,
+    AMBUSH_PIPELINE_PATH,
+    AMBUSH_RESULTS_PATH,
+    AMBUSH_SNAPSHOT_PATH,
     CONFIG_PATH,
     HOLDING_ANALYSIS_PATH,
     HOLDINGS_PATH,
     RESULTS_PATH,
     STATUS_PATH,
+    WATCHLIST_PATH,
     ensure_data_dirs,
 )
 
@@ -101,6 +115,14 @@ def save_holdings(holdings: HoldingListResponse) -> None:
     save_model(HOLDINGS_PATH, holdings)
 
 
+def load_watchlist() -> WatchlistResponse:
+    return load_model(WATCHLIST_PATH, WatchlistResponse, WatchlistResponse(generated_at=utc_now_iso()))
+
+
+def save_watchlist(watchlist: WatchlistResponse) -> None:
+    save_model(WATCHLIST_PATH, watchlist)
+
+
 def load_holding_analysis() -> HoldingAnalysisResponse | None:
     if not HOLDING_ANALYSIS_PATH.exists():
         return None
@@ -116,3 +138,40 @@ def clear_holding_analysis() -> None:
         HOLDING_ANALYSIS_PATH.unlink()
     except FileNotFoundError:
         pass
+
+
+def load_ambush_results() -> dict[str, Any] | None:
+    if not AMBUSH_RESULTS_PATH.exists():
+        return None
+    return read_json(AMBUSH_RESULTS_PATH, {})
+
+
+def save_ambush_results(data: dict[str, Any]) -> None:
+    write_json(AMBUSH_RESULTS_PATH, data)
+
+
+def load_ambush_brief() -> AmbushBrief | None:
+    """加载简报"""
+    if not AMBUSH_BRIEF_PATH.exists():
+        return None
+    try:
+        return AmbushBrief.model_validate(read_json(AMBUSH_BRIEF_PATH, {}))
+    except Exception:
+        return None
+
+
+def save_ambush_brief(brief: AmbushBrief) -> None:
+    """保存简报"""
+    save_model(AMBUSH_BRIEF_PATH, brief)
+
+
+def load_ambush_snapshot() -> dict[str, Any] | None:
+    """加载上次管道快照"""
+    if not AMBUSH_SNAPSHOT_PATH.exists():
+        return None
+    return read_json(AMBUSH_SNAPSHOT_PATH, {})
+
+
+def save_ambush_snapshot(data: dict[str, Any]) -> None:
+    """保存管道快照"""
+    write_json(AMBUSH_SNAPSHOT_PATH, data)

@@ -8,6 +8,8 @@ import pandas as pd
 
 from .models import (
     CandlestickPattern,
+    KlineScenarioBand,
+    KlineScenarioResponse,
     TechnicalAnalysisResponse,
     TechnicalLevel,
     TechnicalLevelsResponse,
@@ -552,5 +554,251 @@ def build_technical_analysis(frame: pd.DataFrame, code: str, name: str = "") -> 
     )
 
 
+def _return_over(close: pd.Series, periods: int) -> float | None:
+    if len(close) <= periods:
+        return None
+    previous = _safe_number(close.iloc[-periods - 1])
+    latest = _safe_number(close.iloc[-1])
+    if previous <= 0 or latest <= 0:
+        return None
+    return (latest / previous - 1) * 100
+
+
+def _direction_from_number(value: float | None, threshold: float = 0.2) -> str:
+    if value is None or abs(value) < threshold:
+        return "neutral"
+    return "bullish" if value > 0 else "bearish"
+
+
+def _range_state(last_close: float, low: float, high: float) -> tuple[str, float | None]:
+    if high <= low or last_close <= 0:
+        return "区间位置数据不足", None
+    position = (last_close - low) / (high - low)
+    if position >= 0.78:
+        label = "接近近一年高位区"
+    elif position <= 0.22:
+        label = "接近近一年低位区"
+    else:
+        label = "处于近一年中部区间"
+    return f"{label}，位置分位 {position * 100:.1f}%。", position
+
+
+def _volatility_state(current: float, history: pd.Series) -> str:
+    valid = history.dropna()
+    if current <= 0 or len(valid) < 30:
+        return "波动率样本不足"
+    low = float(valid.quantile(0.33))
+    high = float(valid.quantile(0.67))
+    if current >= high:
+        return f"波动偏高，ATR14/收盘价 {current:.2f}%，高于历史中枢。"
+    if current <= low:
+        return f"波动偏低，ATR14/收盘价 {current:.2f}%，低于历史中枢。"
+    return f"波动处于常态区，ATR14/收盘价 {current:.2f}%。"
+
+
+def _scenario_band(work: pd.DataFrame, last_close: float, horizon_days: int) -> KlineScenarioBand | None:
+    close = work["close"].tail(250)
+    returns = close.pct_change(horizon_days).dropna()
+    if len(returns) < max(12, horizon_days // 2):
+        return None
+
+    downside = float(returns.quantile(0.25))
+    base = float(returns.quantile(0.50))
+    upside = float(returns.quantile(0.75))
+
+    # A股单日涨跌幅通常有硬边界，这里只做理论边界校验，避免极端异常数据把区间拉飞。
+    max_up = 1.10**horizon_days - 1
+    max_down = 0.90**horizon_days - 1
+    downside = max(max_down, downside)
+    base = max(max_down, min(max_up, base))
+    upside = min(max_up, upside)
+
+    labels = {5: "5日短线", 20: "20日波段", 60: "60日中期"}
+    basis = (
+        f"近{len(close)}个交易日中，历史{horizon_days}日涨跌幅的25%/50%/75%分位，"
+        "叠加当前最新收盘价换算。"
+    )
+    return KlineScenarioBand(
+        horizon_days=horizon_days,
+        label=labels.get(horizon_days, f"{horizon_days}日情景"),
+        downside_price=round(last_close * (1 + downside), 2),
+        base_price=round(last_close * (1 + base), 2),
+        upside_price=round(last_close * (1 + upside), 2),
+        downside_return_pct=round(downside * 100, 2),
+        base_return_pct=round(base * 100, 2),
+        upside_return_pct=round(upside * 100, 2),
+        probability_note="历史分位情景，不代表未来真实概率。",
+        basis=basis,
+    )
+
+
+def build_kline_scenario(frame: pd.DataFrame, code: str, name: str = "") -> KlineScenarioResponse:
+    work = _prepare_history(frame)
+    data_gaps: list[str] = []
+
+    if work.empty:
+        return KlineScenarioResponse(
+            code=normalize_stock_code(code),
+            name=name,
+            generated_at=utc_now_iso(),
+            lookback_days=0,
+            summary="暂无可用 K 线数据，无法形成情景参考。",
+            data_gaps=["缺少可用历史K线"],
+        )
+
+    last = work.iloc[-1]
+    last_close = _safe_number(last["close"])
+    trade_date = last["date"].date().isoformat()
+    if len(work) < 30:
+        return KlineScenarioResponse(
+            code=normalize_stock_code(code),
+            name=name,
+            generated_at=utc_now_iso(),
+            trade_date=trade_date,
+            last_close=round(last_close, 2) if last_close > 0 else None,
+            lookback_days=len(work),
+            summary="历史 K 线少于30个交易日，只保留事实收盘价，不生成情景区间。",
+            data_gaps=["历史K线少于30个交易日"],
+        )
+
+    work = _add_indicator_columns(work)
+    lookback = min(len(work), 250)
+    recent = work.tail(lookback)
+    last = work.iloc[-1]
+    close = work["close"]
+
+    last_close = _safe_number(last["close"])
+    ma20 = _safe_number(last.get("ma20"))
+    ma60 = _safe_number(last.get("ma60"))
+    ma120 = _safe_number(last.get("ma120"))
+    ma20_slope = _safe_number(last.get("ma20_slope5"))
+    return20 = _return_over(close, 20)
+    return60 = _return_over(close, 60)
+    atr14 = _safe_number(last.get("atr14"))
+    atr_pct = atr14 / last_close * 100 if last_close > 0 and atr14 > 0 else 0
+    atr_history = (work["atr14"] / work["close"] * 100).tail(250)
+    volume = _safe_number(last.get("volume"))
+    volume_ma20 = _safe_number(last.get("volume_ma20"))
+    volume_ratio = volume / volume_ma20 if volume > 0 and volume_ma20 > 0 else None
+
+    if len(work) < 120:
+        data_gaps.append("历史K线少于120个交易日，中期情景参考样本偏少")
+    if volume_ratio is None:
+        data_gaps.append("成交量数据不足，量能状态无法复核")
+    if _safe_number(last.get("amount")) <= 0:
+        data_gaps.append("成交额数据不足，成交均价类指标可信度下降")
+
+    trend_points = 0
+    if ma20 > 0:
+        trend_points += 1 if last_close >= ma20 else -1
+    if ma60 > 0:
+        trend_points += 1 if last_close >= ma60 else -1
+    if ma120 > 0:
+        trend_points += 1 if last_close >= ma120 else -1
+    if ma20_slope > 0:
+        trend_points += 1
+    elif ma20_slope < 0:
+        trend_points -= 1
+
+    if trend_points >= 3:
+        trend_context = "价格位于多条均线上方，MA20斜率配合偏强，序列结构偏上。"
+    elif trend_points <= -3:
+        trend_context = "价格位于多条均线下方，MA20斜率配合偏弱，序列结构偏下。"
+    else:
+        trend_context = "均线和斜率信号不够一致，序列结构偏震荡。"
+
+    low120 = _safe_number(recent["low"].tail(120).min())
+    high120 = _safe_number(recent["high"].tail(120).max())
+    range_context, range_position = _range_state(last_close, low120, high120)
+    volatility_context = _volatility_state(atr_pct, atr_history)
+
+    if volume_ratio is None:
+        volume_context = "量能样本不足"
+    elif volume_ratio >= 1.35:
+        volume_context = f"最近成交量放大，量比 {volume_ratio:.2f}。"
+    elif volume_ratio <= 0.75:
+        volume_context = f"最近成交量收缩，量比 {volume_ratio:.2f}。"
+    else:
+        volume_context = f"最近成交量接近常态，量比 {volume_ratio:.2f}。"
+
+    scenario_bands = [
+        band
+        for horizon in (5, 20, 60)
+        if (band := _scenario_band(recent, last_close, horizon)) is not None
+    ]
+    if not scenario_bands:
+        data_gaps.append("历史样本不足，无法生成情景区间")
+
+    sequence_signals = [
+        TechnicalSignal(
+            label="20日涨跌",
+            value="-" if return20 is None else f"{return20:.2f}%",
+            direction=_direction_from_number(return20),
+            weight=8,
+        ),
+        TechnicalSignal(
+            label="60日涨跌",
+            value="-" if return60 is None else f"{return60:.2f}%",
+            direction=_direction_from_number(return60),
+            weight=8,
+        ),
+        TechnicalSignal(
+            label="MA20斜率",
+            value=f"{ma20_slope:.2f}%" if ma20_slope else "0.00%",
+            direction=_direction_from_number(ma20_slope),
+            weight=6,
+        ),
+        TechnicalSignal(
+            label="区间位置",
+            value="-" if range_position is None else f"{range_position * 100:.1f}%",
+            direction="bearish" if range_position is not None and range_position >= 0.82 else "neutral",
+            weight=5,
+        ),
+        TechnicalSignal(
+            label="量能",
+            value="-" if volume_ratio is None else f"{volume_ratio:.2f}",
+            direction="bullish" if volume_ratio is not None and volume_ratio >= 1.35 else "neutral",
+            weight=5,
+        ),
+    ]
+
+    support_levels: list[TechnicalLevel] = []
+    resistance_levels: list[TechnicalLevel] = []
+    try:
+        technical = build_technical_analysis(frame, code, name)
+        support_levels = technical.support_levels[:3]
+        resistance_levels = technical.resistance_levels[:3]
+    except Exception as exc:
+        data_gaps.append(f"支撑压力复核失败：{exc}")
+
+    summary = (
+        f"{trend_context}{volatility_context}{range_context}"
+        "情景价位来自历史K线分位，不使用AI生成行情价，也不作为买卖点。"
+    )
+
+    return KlineScenarioResponse(
+        code=normalize_stock_code(code),
+        name=name,
+        generated_at=utc_now_iso(),
+        trade_date=trade_date,
+        last_close=round(last_close, 2),
+        lookback_days=lookback,
+        trend_context=trend_context,
+        volatility_state=volatility_context,
+        range_state=range_context,
+        volume_state=volume_context,
+        summary=summary,
+        scenario_bands=scenario_bands,
+        sequence_signals=sequence_signals,
+        support_levels=support_levels,
+        resistance_levels=resistance_levels,
+        data_gaps=data_gaps,
+    )
+
+
 def calculate_technical_analysis(code: str, name: str = "") -> TechnicalAnalysisResponse:
     return build_technical_analysis(fetch_price_history(code), code, name)
+
+
+def calculate_kline_scenario(code: str, name: str = "") -> KlineScenarioResponse:
+    return build_kline_scenario(fetch_price_history(code, lookback_days=560), code, name)

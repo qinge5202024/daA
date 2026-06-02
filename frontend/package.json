@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",
+    "html-to-image": "^1.11.13",
     "lucide-react": "^0.561.0",
+    "motion": "^12.40.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "typescript": "^5.9.3",

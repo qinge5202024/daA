@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -199,6 +200,40 @@ class TechnicalAnalysisResponse(BaseModel):
     risks: list[str]
 
 
+class KlineScenarioBand(BaseModel):
+    horizon_days: int
+    label: str
+    downside_price: float | None = None
+    base_price: float | None = None
+    upside_price: float | None = None
+    downside_return_pct: float | None = None
+    base_return_pct: float | None = None
+    upside_return_pct: float | None = None
+    probability_note: str
+    basis: str
+
+
+class KlineScenarioResponse(BaseModel):
+    code: str
+    name: str
+    generated_at: str
+    trade_date: str | None = None
+    last_close: float | None = None
+    source: str = "baostock+local_sequence"
+    lookback_days: int = 0
+    trend_context: str = ""
+    volatility_state: str = ""
+    range_state: str = ""
+    volume_state: str = ""
+    summary: str = ""
+    scenario_bands: list[KlineScenarioBand] = Field(default_factory=list)
+    sequence_signals: list[TechnicalSignal] = Field(default_factory=list)
+    support_levels: list[TechnicalLevel] = Field(default_factory=list)
+    resistance_levels: list[TechnicalLevel] = Field(default_factory=list)
+    data_gaps: list[str] = Field(default_factory=list)
+    research_only_note: str = "K线情景参考仅用于研究观察，不构成预测或投资建议。"
+
+
 class AiRemarkRequest(BaseModel):
     limit: int = 20
 
@@ -241,6 +276,24 @@ class AiAnalysisResponse(BaseModel):
     analyses: list[AiStockAnalysis] = Field(default_factory=list)
 
 
+class WatchlistItem(BaseModel):
+    id: str = ""
+    code: str = ""
+    name: str = ""
+    group: str = "默认"
+    note: str = ""
+    added_at: str = ""
+
+
+class WatchlistResponse(BaseModel):
+    generated_at: str
+    watchlist: list[WatchlistItem] = Field(default_factory=list)
+
+
+class WatchlistSaveRequest(BaseModel):
+    watchlist: list[WatchlistItem] = Field(default_factory=list)
+
+
 class HoldingItem(BaseModel):
     id: str = ""
     code: str = ""
@@ -249,6 +302,47 @@ class HoldingItem(BaseModel):
     cost_price: float
     holding_period: str = "short"
     note: str = ""
+
+
+class AmbushBriefItem(BaseModel):
+    """简报中的一条项目"""
+    code: str
+    name: str
+    sector: str
+    stage: str = ""
+    total_score: float = 0.0
+    change: str = ""  # new/promoted/new_signal/expired
+    detail: str = ""
+
+
+class AmbushBrief(BaseModel):
+    """每日简报
+
+    通过对比当前管道快照与上次快照，提取变化信息。
+    """
+    generated_at: str
+    pipeline_generated_at: str = ""
+    
+    # 变化概览
+    new_items_count: int = 0
+    promoted_count: int = 0
+    expired_count: int = 0
+    new_signal_count: int = 0
+    
+    # 变化明细
+    new_items: list[AmbushBriefItem] = Field(default_factory=list)
+    promoted_items: list[AmbushBriefItem] = Field(default_factory=list)
+    expired_items: list[AmbushBriefItem] = Field(default_factory=list)
+    new_signal_items: list[AmbushBriefItem] = Field(default_factory=list)
+    
+    # 各阶段亮点（当前管道中评分最高的几只）
+    top_watch: list[AmbushBriefItem] = Field(default_factory=list)
+    top_brewing: list[AmbushBriefItem] = Field(default_factory=list)
+    top_ignition: list[AmbushBriefItem] = Field(default_factory=list)
+    
+    # 用户标记
+    seen_at: str | None = None
+    has_unseen: bool = True
 
 
 class HoldingListResponse(BaseModel):
@@ -276,6 +370,7 @@ class HoldingAnalysisItem(BaseModel):
     cost_price: float
     quantity: float
     last_price: float | None = None
+    last_price_source: str | None = None
     position_value: float | None = None
     unrealized_profit: float | None = None
     unrealized_profit_pct: float | None = None
@@ -296,3 +391,101 @@ class HoldingAnalysisResponse(BaseModel):
     ok: bool = True
     message: str = ""
     analyses: list[HoldingAnalysisItem] = Field(default_factory=list)
+
+
+class AmbushStage(str, enum.Enum):
+    WATCH = "观察池"
+    BREWING = "蓄势中"
+    IGNITION = "待点火"
+    TRIGGERED = "触发条件"
+    EXPIRED = "已失效"
+
+
+class AmbushSignalDetail(BaseModel):
+    signal_key: str
+    signal_name: str
+    group: str  # 蓄势组/吸筹组/背离组
+    confidence: float = 0.0
+    details: str = ""
+
+
+class AmbushThematicScore(BaseModel):
+    matched_concepts: list[str] = Field(default_factory=list)
+    concept_count: int = 0
+    hot_concept_hits: int = 0
+    sector_relevance: float = 0.0
+    score: float = 0.0
+
+
+class AmbushConfirmCondition(BaseModel):
+    condition: str = ""
+    trigger_price: float | None = None
+    price_basis: str = ""
+    stop_loss: str = ""
+    target: str = ""
+    time_limit_days: int = 30
+
+
+class AmbushItem(BaseModel):
+    code: str
+    name: str
+    sector: str
+    industry: str
+    stage: AmbushStage = AmbushStage.WATCH
+    
+    # 综合评分
+    total_score: float = 0.0
+    structure_score: float = 0.0     # K线结构组
+    quality_score: float = 0.0       # 基本面安全垫
+    thematic_score: float = 0.0      # 题材预期
+    
+    # 信号明细
+    signals: list[AmbushSignalDetail] = Field(default_factory=list)
+    thematic: AmbushThematicScore = Field(default_factory=AmbushThematicScore)
+    
+    # 确认条件（待点火阶段才有）
+    conditions: list[AmbushConfirmCondition] = Field(default_factory=list)
+    
+    # 进管道时间
+    entered_at: str = ""
+    last_signal_at: str = ""
+    days_in_pipeline: int = 0
+    
+    # 降级原因
+    expired_reason: str = ""
+
+
+class AmbushConfig(BaseModel):
+    max_watch_pool: int = 300
+    max_brewing_pool: int = 80
+    max_ignition_pool: int = 30
+    structure_weight: float = 0.35
+    quality_weight: float = 0.25
+    thematic_weight: float = 0.25
+    ambush_weight: float = 0.15
+    structure_threshold: float = 55.0
+    ignition_threshold: float = 60.0
+    expire_days: int = 45
+    hot_concept_list: list[str] = Field(default_factory=lambda: [
+        "人工智能", "AI", "芯片", "半导体", "新能源", "光伏",
+        "低空经济", "机器人", "消费电子", "汽车", "医药",
+    ])
+
+
+class AmbushResponse(BaseModel):
+    generated_at: str
+    total_analyzed: int = 0
+    results: list[AmbushItem] = Field(default_factory=list)
+    pipeline_summary: dict[str, int] = Field(default_factory=dict)
+
+
+class AmbushPipelineResponse(BaseModel):
+    generated_at: str
+    watch_pool: list[AmbushItem] = Field(default_factory=list)
+    brewing_pool: list[AmbushItem] = Field(default_factory=list)
+    ignition_pool: list[AmbushItem] = Field(default_factory=list)
+    triggered: list[AmbushItem] = Field(default_factory=list)
+    expired: list[AmbushItem] = Field(default_factory=list)
+    new_today: int = 0
+    triggered_today: int = 0
+    expired_today: int = 0
