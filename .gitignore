@@ -8,6 +8,7 @@ venv/
 .env
 .env.*
 !.env.example
+.vercel/
 *.log
 
 frontend/node_modules/
