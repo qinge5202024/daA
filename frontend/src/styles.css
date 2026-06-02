@@ -899,6 +899,24 @@ body.capture-mode {
   box-shadow: 0 16px 38px rgba(0, 0, 0, 0.26), 0 0 30px rgba(var(--ar), var(--ag), var(--ab), 0.2);
 }
 
+.about-contact-actions {
+  display: grid;
+  gap: 10px;
+  min-width: 178px;
+}
+
+.about-link.secondary {
+  color: var(--text);
+  background: rgba(15, 34, 43, 0.82);
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.about-link.secondary:hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 22px rgba(90, 200, 255, 0.12);
+}
+
 .about-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -946,6 +964,55 @@ body.capture-mode {
 .about-card.wide {
   grid-column: span 2;
   min-height: 160px;
+}
+
+.about-contact-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.about-contact-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 8px 10px;
+  background: var(--panel-soft);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+}
+
+.about-contact-list span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.about-contact-list a {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.qr-card {
+  min-height: 360px;
+}
+
+.about-qr {
+  display: block;
+  width: min(100%, 260px);
+  margin: 12px auto 0;
+  aspect-ratio: 9 / 13;
+  object-fit: cover;
+  object-position: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.34);
 }
 
 .dashboard-strip {

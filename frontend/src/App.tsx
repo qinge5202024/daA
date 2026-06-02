@@ -20,7 +20,9 @@ import {
   Info,
   Layers3,
   ListFilter,
+  Mail,
   Plus,
+  QrCode,
   RefreshCw,
   Save,
   Search,
@@ -1285,16 +1287,23 @@ function AboutView() {
               它不承诺神奇预测，也不输出买卖指令，只尽量把公开数据、筛选逻辑、风险标签和复核理由摆到台面上。
             </p>
           </div>
-          <a
-            className="about-link"
-            href="https://github.com/qinge5202024/daA/issues"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <Handshake size={18} />
-            <span>合作联系</span>
-            <ExternalLink size={15} />
-          </a>
+          <div className="about-contact-actions">
+            <a className="about-link" href="mailto:haliqinge@gmail.com">
+              <Mail size={18} />
+              <span>邮件合作</span>
+              <ExternalLink size={15} />
+            </a>
+            <a
+              className="about-link secondary"
+              href="https://github.com/qinge5202024/daA/issues"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <Handshake size={18} />
+              <span>GitHub Issues</span>
+              <ExternalLink size={15} />
+            </a>
+          </div>
         </div>
       </div>
 
@@ -1325,10 +1334,25 @@ function AboutView() {
         <div className="about-card">
           <Handshake size={22} />
           <h3>合作联系</h3>
-          <p>
-            功能共建、数据源适配、私有化部署、策略模块合作和问题反馈，请通过 GitHub Issues 联系。
-            商业合作必须先获得作者书面授权。
-          </p>
+          <ul className="about-contact-list">
+            <li>
+              <span>邮箱</span>
+              <a href="mailto:haliqinge@gmail.com">haliqinge@gmail.com</a>
+            </li>
+            <li>
+              <span>GitHub</span>
+              <a href="https://github.com/qinge5202024/daA/issues" target="_blank" rel="noreferrer">
+                Issues
+              </a>
+            </li>
+          </ul>
+          <p>功能共建、数据源适配、私有化部署、策略模块合作请先联系作者，商业合作必须获得书面授权。</p>
+        </div>
+        <div className="about-card qr-card">
+          <QrCode size={22} />
+          <h3>合作微信</h3>
+          <img className="about-qr" src="/contact-wechat.jpg" alt="合作微信二维码，微信名黄金" />
+          <p>微信名：黄金。扫码添加时请备注来意，例如“项目合作”或“私有化部署”。</p>
         </div>
         <div className="about-card wide">
           <CircleDollarSign size={22} />
